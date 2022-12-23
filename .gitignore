@@ -14,7 +14,6 @@
 # Compiled Dynamic libraries
 *.so
 *.dylib
-*.dll
 
 # Fortran module files
 *.mod
@@ -30,3 +29,17 @@
 *.exe
 *.out
 *.app
+
+**/.vs
+**/obj
+**/bin
+**/x64
+
+*.dll
+!Sources/Library/General.dll
+
+*.pdb
+
+**/Output
+
+*.vcxproj.user
