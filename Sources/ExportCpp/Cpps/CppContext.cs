@@ -1,5 +1,4 @@
 ﻿using ClangSharp.Interop;
-using General;
 
 namespace ExportCpp
 {
@@ -9,9 +8,8 @@ namespace ExportCpp
         public string FileContent { get; init; }
 
         public Declaration? RootScope { get; private set; }
-        public Stack<Declaration> mScopes = new Stack<Declaration>();
-        public Stack<DeclarationCollection> mCollections = new Stack<DeclarationCollection>();
-        public Stack<Namespace> mNamespaces = new Stack<Namespace>();
+        private Stack<Declaration> mScopes = new Stack<Declaration>();
+        public Declaration? CurrentScope => mScopes.Count > 0 ? mScopes.Peek() : null;
 
         private Dictionary<string, Declaration> mDeclarations = new Dictionary<string, Declaration>();
         public IEnumerable<Declaration> Declarations => mDeclarations.Values;
@@ -19,12 +17,15 @@ namespace ExportCpp
         private List<Declaration> mExports = new List<Declaration>();
         public IEnumerable<Declaration> Exports => mExports;
 
-        private List<CXCursor> mCursors = new List<CXCursor>();
-        public IEnumerable<CXCursor> Cursors => mCursors;
-
         public Namespace Global { get; init; }
 
-        public CppContext(string filename, Namespace global) : this(filename, File.ReadAllText(filename), global) { }
+        public CppContext(string filename, Namespace global) : this(filename, File.ReadAllText(filename), global)
+        {
+            foreach (Declaration declaration in global.Declarations)
+            {
+                mDeclarations.Add(declaration.FullName, declaration);
+            }
+        }
 
         internal CppContext(string filename, string fileContent, Namespace global)
         {
@@ -37,24 +38,7 @@ namespace ExportCpp
         public void PushScope(Declaration scope)
         {
             this.RootScope ??= scope;
-
-            if (mCollections.Count > 0)
-            {
-                mCollections.Peek().AddDeclaration(scope);
-            }
-
-            DeclarationCollection? collection = scope as DeclarationCollection;
-            if (collection is not null)
-            {
-                mCollections.Push(collection);
-                mScopes.Push(scope);
-
-                Namespace? @namespace = scope as Namespace;
-                if (@namespace is not null)
-                {
-                    mNamespaces.Push(@namespace);
-                }
-            }
+            mScopes.Push(scope);
         }
 
         public void AppendDeclaration(Declaration declaration)
@@ -85,7 +69,19 @@ namespace ExportCpp
         public Declaration? GetDeclaration(string fullname)
         {
             Declaration? declaration;
-            return mDeclarations.TryGetValue(fullname, out declaration) ? declaration : null;
+            if (!mDeclarations.TryGetValue(fullname, out declaration))
+            {
+                string[] parts = fullname.Split("::");
+                if (parts.Length > 1)
+                {
+                    mDeclarations.TryGetValue(parts[0], out declaration);
+                    for (int i = 1; i < parts.Length && declaration is not null; ++i)
+                    {
+                        declaration = (declaration as DeclarationCollection)?.GetDeclaration(parts[i]);
+                    }
+                }
+            }
+            return declaration;
         }
 
         public void PopScope(Declaration scope)
@@ -94,25 +90,6 @@ namespace ExportCpp
             {
                 mScopes.Pop();
             }
-
-            DeclarationCollection? collection = scope as DeclarationCollection;
-            if (collection is not null)
-            {
-                DeclarationCollection? topCollection = mCollections.Pop();
-                Tracer.Assert(topCollection == collection);
-
-                Namespace? @namespace = scope as Namespace;
-                if (@namespace is not null)
-                {
-                    Namespace? topNamespace = mNamespaces.Pop();
-                    Tracer.Assert(topNamespace == @namespace);
-                }
-            }
-        }
-
-        public void AppendCursor(CXCursor cursor)
-        {
-            mCursors.Add(cursor);
         }
 
         public override string ToString()

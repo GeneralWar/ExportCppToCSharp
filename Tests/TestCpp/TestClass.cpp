@@ -3,13 +3,22 @@
 
 namespace TestNamespace
 {
-	TestClass::TestClass(const int& value) : mValue(value) { }
+	TestClass::TestClass(const int& value) : mValue(value), mValueChangeCallback() { }
 
 	TestClass::~TestClass() { }
+
+	void TestClass::SetValueChangeCallback(ValueChange callback)
+	{
+		mValueChangeCallback = callback;
+	}
 
 	void TestClass::SetValue(const int& value)
 	{
 		mValue = value;
+		if (mValueChangeCallback)
+		{
+			mValueChangeCallback(this, value);
+		}
 	}
 
 	int TestClass::GetValue()

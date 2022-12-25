@@ -42,6 +42,16 @@ namespace ExportCpp.Cpps
             return this.IsPointer ? this : new CppType(this.Declaration, true);
         }
 
+        public Type ToCSharpType()
+        {
+            return (this.Declaration as ITypeDeclaration)?.Type.CSharpType ?? typeof(IntPtr);
+        }
+
+        public string ToCSharpTypeString()
+        {
+            return (this.Declaration as ITypeDeclaration)?.Type.CSharpTypeString ?? throw new InvalidOperationException();
+        }
+
         public override ConstructorInfo[] GetConstructors(BindingFlags bindingAttr)
         {
             throw new NotImplementedException();

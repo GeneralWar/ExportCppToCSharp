@@ -2,6 +2,8 @@
 
 namespace TestNamespace
 {
+	class TestClass;
+
 	enum TestEnum : unsigned short
 	{
 		TestEnum1,
@@ -20,12 +22,19 @@ namespace TestNamespace
 	EXPORT_CLASS(TestClass, test_class)
 	class TestClass
 	{
+	public:
+		EXPORT_FUNCTION_POINTER
+		typedef void (*ValueChange)(TestClass* instance, int value);
 	private:
 		int mValue;
+		ValueChange mValueChangeCallback;
 	public:
 		EXPORT_CONSTRUCTOR(create_test_class);
 		TestClass(const int& value);
 		virtual ~TestClass();
+
+		EXPORT_FUNCTION(set_value_change_callback, 0);
+		void SetValueChangeCallback(ValueChange callback);
 
 		EXPORT_FUNCTION(set_value, 0);
 		void SetValue(const int& value);

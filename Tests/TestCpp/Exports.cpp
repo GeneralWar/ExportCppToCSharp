@@ -8,6 +8,12 @@ extern "C"
 		return new TestNamespace::TestClass(value);
 	}
 
+	__declspec (dllexport) void test_class_set_value_change_callback(TestNamespace::TestClass* instance, TestNamespace::TestClass::ValueChange callback)
+	{
+		if (!instance) return;
+		instance->SetValueChangeCallback(callback);
+	}
+
 	__declspec (dllexport) void test_class_set_value(TestNamespace::TestClass* instance, int value)
 	{
 		if (!instance) return;

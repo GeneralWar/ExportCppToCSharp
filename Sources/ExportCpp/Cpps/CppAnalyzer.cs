@@ -1,15 +1,17 @@
 ﻿using ClangSharp.Interop;
 using General;
 using General.Tracers;
+using System.Text.RegularExpressions;
 using System.Xml;
 
 namespace ExportCpp
 {
-    internal class CppAnalyzer
+    internal partial class CppAnalyzer
     {
         static internal string ExportClassMacro { get; private set; } = "EXPORT_CLASS";
         static internal string ExportConstructorMacro { get; private set; } = "EXPORT_CONSTRUCTOR";
         static internal string ExportFunctionMacro { get; private set; } = "EXPORT_FUNCTION";
+        static internal string ExportFunctionPointerMacro { get; private set; } = "EXPORT_FUNCTION_POINTER";
 
         static internal string ExportStructMacro { get; private set; } = "EXPORT_STRUCT";
         static internal string ExportFieldMacro { get; private set; } = "EXPORT_FIELD";
@@ -17,33 +19,49 @@ namespace ExportCpp
         static internal string ExportEnumMacro { get; private set; } = "EXPORT_ENUM";
         static internal string ExportEnumValueMacro { get; private set; } = "EXPORT_ENUM_VALUE";
 
+        static internal string[] ExportMacros => new[] { ExportClassMacro, ExportConstructorMacro, ExportFunctionMacro, ExportFunctionPointerMacro, ExportStructMacro, ExportFieldMacro, ExportEnumMacro, ExportEnumValueMacro };
+
+
         private const string PLACE_HOLDER_INCLUDES = "{PLACE_HOLDER_INCLUDES}";
 
         public string ProjectFilename { get; init; }
-        public string ExportFilename { get; init; }
-        public string? ExportPchFilename { get; private set; } = null;
-        public string BindingFilename { get; init; }
         public string ProjectDirectory { get; init; }
+
+        public string ExportFilename { get; init; }
+        public string BindingFilename { get; init; }
+
+        public string SolutionFilename { get; init; }
+        public string SolutionDirectory { get; init; }
 
         public string LibraryName { get; init; }
 
         public string BindingClassname { get; init; }
         public string? BindingNamespace { get; private set; }
 
+        public string? PchFilename { get; private set; } = null;
+        public string? CompiledPchFilename { get; private set; } = null;
+
+        public HashSet<string> IncludeDirectories { get; init; } = new HashSet<string>();
+        public HashSet<string> IncludeHeaderFiles { get; init; } = new HashSet<string>();
+        public HashSet<string> DefineMacros { get; init; } = new HashSet<string>();
+
         private Namespace mGlobal;
 
-        public CppAnalyzer(string projectFilename, string exportFilename, string bindingFilename, string libraryName, string bindingClassname)
+        public CppAnalyzer(string solutionFilename, string projectFilename, string exportFilename, string bindingFilename, string libraryName, string bindingClassname)
         {
+            this.SolutionFilename = solutionFilename;
+            this.SolutionDirectory = Path.GetDirectoryName(solutionFilename) ?? "";
+
             this.ProjectFilename = projectFilename;
             this.ExportFilename = exportFilename;
             this.BindingFilename = bindingFilename;
             this.ProjectDirectory = Path.GetDirectoryName(projectFilename) ?? "";
+            this.IncludeDirectories.Add(PathUtility.MakeDirectoryStandard(this.ProjectDirectory));
 
             this.LibraryName = libraryName;
             this.BindingClassname = bindingClassname;
 
-            mGlobal = new Namespace(new CppContext("", "", null), new CXCursor());
-            mGlobal.SetAsRoot();
+            mGlobal = this.initializeGlobal();
         }
 
         public void SetNamespace(string? bindingNamespace)
@@ -51,26 +69,233 @@ namespace ExportCpp
             this.BindingNamespace = bindingNamespace;
         }
 
-        public void SetExportPchFilename(string? filename)
+        private void printVersion()
         {
-            this.ExportPchFilename = filename;
+            CXTranslationUnit unit;
+            CXErrorCode errorCode = CXTranslationUnit.TryParse(CXIndex.Create(), "", new string[] { "--version", "-v" }, new CXUnsavedFile[0], CXTranslationUnit_Flags.CXTranslationUnit_None, out unit);
         }
 
-        public void Analyze()
+        private string checkConfigurationString(string inputString)
         {
-            XmlDocument document = new XmlDocument();
-            document.Load(this.ProjectFilename);
-
-            XmlNodeList includeList = document.GetElementsByTagName("ClInclude");
-            foreach (XmlNode includeNode in includeList)
+            MatchCollection matches = Regex.Matches(inputString, @"\$\((\w+)\)");
+            if (matches.Count > 0)
             {
-                string? headerFilename = includeNode.Attributes?["Include"]?.InnerText;
-                if (string.IsNullOrWhiteSpace(headerFilename))
+                string content = inputString;
+                foreach (Match match in matches)
+                {
+                    string environmentName = match.Groups[1].Value;
+                    switch (environmentName)
+                    {
+                        case "ProjectDir":
+                            content = content.Replace("$(ProjectDir)", PathUtility.MakeDirectoryStandard(this.ProjectDirectory));
+                            break;
+                        case "SolutionDir":
+                            content = content.Replace("$(SolutionDir)", PathUtility.MakeDirectoryStandard(this.SolutionDirectory));
+                            break;
+                        default:
+                            content = content.Replace($"$({environmentName})", Environment.GetEnvironmentVariable(environmentName) ?? throw new InvalidOperationException());
+                            break;
+                    }
+                }
+                return content;
+            }
+            return inputString;
+        }
+
+        private void checkIncludeDirectories(XmlDocument document)
+        {
+            XmlNodeList list = document.GetElementsByTagName("AdditionalIncludeDirectories");
+            foreach (XmlNode item in list)
+            {
+                foreach (string value in item.InnerText.Split(';'))
+                {
+                    string directory = this.checkConfigurationString(value);
+                    this.IncludeDirectories.Add(PathUtility.MakeDirectoryStandard(this.checkFullPathForProjectFile(directory)));
+                }
+            }
+        }
+
+        private string checkFullPathForProjectFile(string filename)
+        {
+            return Path.IsPathRooted(filename) ? Path.GetFullPath(filename) : Path.GetFullPath(filename, this.ProjectDirectory);
+        }
+
+        private bool execute(IEnumerable<string> arguments, string filename, out CXTranslationUnit translationUnit)
+        {
+            return this.execute(arguments, filename, new CXUnsavedFile[0], out translationUnit);
+        }
+
+        private bool execute(IEnumerable<string> arguments, string filename, IEnumerable<CXUnsavedFile> unsavedFiles, out CXTranslationUnit translationUnit)
+        {
+            List<string> argumentList = new List<string>(arguments);
+            foreach (string directory in this.IncludeDirectories)
+            {
+                argumentList.Add("--include-directory");
+                argumentList.Add(directory);
+            }
+            foreach (string macro in this.DefineMacros)
+            {
+                argumentList.Add("-D");
+                argumentList.Add(macro);
+            }
+            //#if DEVELOP
+            //            argumentList.Add("-v");
+            //#endif
+
+            Tracer.Log($"Try to execute clang with arguments : {string.Join(" ", argumentList)}");
+            //ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
+            ConsoleLogger.Log($"Try to analyze {filename}");
+            CXErrorCode errorCode = CXTranslationUnit.TryParse(CXIndex.Create(), filename, new ReadOnlySpan<string>(argumentList.ToArray()), new ReadOnlySpan<CXUnsavedFile>(unsavedFiles.ToArray()), CXTranslationUnit_Flags.CXTranslationUnit_None, out translationUnit);
+            if (CXErrorCode.CXError_Success != errorCode)
+            {
+                ConsoleLogger.LogError($"{errorCode} clang {string.Join(" ", argumentList)} \"{filename}\"");
+                return false;
+            }
+
+            if (translationUnit.DiagnosticSet.Count > 0)
+            {
+                bool failed = false;
+                for (uint i = 0; i < translationUnit.DiagnosticSet.Count; ++i)
+                {
+                    CXDiagnostic diagnostic = translationUnit.GetDiagnostic(i);
+
+                    CXFile file;
+                    uint line, column, offset;
+                    diagnostic.Location.GetFileLocation(out file, out line, out column, out offset);
+                    switch (diagnostic.Severity)
+                    {
+                        case CXDiagnosticSeverity.CXDiagnostic_Warning:
+                            Tracer.Warn($"{file}:{line}:{column} warning: {diagnostic.Spelling.CString}");
+                            break;
+                        case CXDiagnosticSeverity.CXDiagnostic_Error:
+                            Tracer.Error($"{file}:{line}:{column} error: {diagnostic.Spelling.CString}");
+                            failed = true;
+                            break;
+                    }
+                }
+                if (failed)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool checkPrecompiledHeader(XmlDocument document)
+        {
+            // <PrecompiledHeader>Use</PrecompiledHeader>
+            XmlNodeList pchNodeList = document.GetElementsByTagName("PrecompiledHeader");
+            if (pchNodeList.Count > 0)
+            {
+                // TODO: check condition
+                XmlNode? pchUseNode = pchNodeList.Find<XmlNode>(n => "Use" == n.InnerText);
+                if (pchUseNode is not null)
+                {
+                    // <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+                    XmlNode? pchNode = pchUseNode.ParentNode?.ChildNodes.Find<XmlNode>(n => "PrecompiledHeaderFile" == n.Name);
+                    if (pchNode is null)
+                    {
+                        throw new InvalidOperationException();
+                    }
+
+                    this.PchFilename = pchNode.InnerText;
+                    string pchFullPath = this.checkFullPathForProjectFile(this.PchFilename);
+                    this.CompiledPchFilename = Path.ChangeExtension(pchFullPath, ".pch");
+                    // clang -x c++-header test.h -o test.h.pch
+                    List<string> commandArguments = new List<string>();
+                    commandArguments.AddRange("-std=c++17 -x c++-header".Split());
+                    commandArguments.Add("-o");
+                    commandArguments.Add(this.CompiledPchFilename);
+
+                    CXTranslationUnit translationUnit;
+                    if (!this.execute(commandArguments, pchFullPath, out translationUnit))
+                    {
+                        Tracer.Error($"Failed to compile pch");
+                        return false;
+                    }
+
+                    translationUnit.Save(this.CompiledPchFilename, CXSaveTranslationUnit_Flags.CXSaveTranslationUnit_None);
+
+                    for (uint i = 0; i < translationUnit.Cursor.NumDecls; ++i)
+                    {
+                        CXCursor cursor = translationUnit.Cursor.GetDecl(i);
+                        CXSourceLocation location = cursor.Location;
+                        if (location.IsInSystemHeader)
+                        {
+                            continue;
+                        }
+
+                        CXFile file;
+                        uint line, column, offset;
+                        location.GetFileLocation(out file, out line, out column, out offset);
+                        string realPath = file.TryGetRealPathName().CString;
+                        if (string.IsNullOrWhiteSpace(realPath) || !PathUtility.IsPathUnderDirectory(realPath, this.ProjectDirectory))
+                        {
+                            continue;
+                        }
+
+                        CppContext context = this.createCppContext(realPath);
+                        if (ExportMacros.All(e => context.FileContent.IndexOf(e) < 0))
+                        {
+                            continue;
+                        }
+                        this.analyzeCursor(context, cursor);
+                    }
+                }
+            }
+            return true;
+        }
+
+        private string[] checkAllFiles(XmlDocument document, string tag, string? attribute)
+        {
+            HashSet<string> filenames = new HashSet<string>();
+            XmlNodeList nodeList = document.GetElementsByTagName(tag);
+            foreach (XmlNode node in nodeList)
+            {
+                string? filename = string.IsNullOrWhiteSpace(attribute) ? node.InnerText : node.Attributes?[attribute]?.InnerText;
+                if (string.IsNullOrWhiteSpace(filename))
                 {
                     continue;
                 }
 
-                this.analyzeHeader(Path.Combine(this.ProjectDirectory ?? "", headerFilename));
+                filenames.Add(this.checkFullPathForProjectFile(filename));
+            }
+            return filenames.ToArray();
+        }
+
+        private string[] checkAllHeaderFiles(XmlDocument document)
+        {
+            return this.checkAllFiles(document, "ClInclude", "Include");
+        }
+
+        private string[] checkAllSourceFiles(XmlDocument document)
+        {
+            return this.checkAllFiles(document, "ClCompile", "Include");
+        }
+
+        public void Analyze()
+        {
+            this.printVersion();
+
+            ConsoleLogger.Log($"Try to analyze project {this.ProjectFilename}");
+
+            XmlDocument document = new XmlDocument();
+            document.Load(this.ProjectFilename);
+
+            this.checkIncludeDirectories(document);
+
+            if (!this.checkPrecompiledHeader(document))
+            {
+                return;
+            }
+
+            string[] headers = this.checkAllHeaderFiles(document);
+            string[] sources = this.checkAllSourceFiles(document);
+
+            foreach (string filename in headers)
+            {
+                this.analyzeFile(filename);
             }
 
             /*XmlNodeList sourceList = document.GetElementsByTagName("ClCompile");
@@ -84,22 +309,48 @@ namespace ExportCpp
 
                 this.analyzeSource(Path.Combine(this.Directory ?? "", sourceFilename));
             }*/
+
+            //if (File.Exists(this.CompiledPchFilename))
+            //{
+            //    File.Delete(this.CompiledPchFilename);
+            //}
         }
 
-        private void analyzeHeader(string filename)
+        private CppContext createCppContext(string filename)
+        {
+            return new CppContext(filename, mGlobal);
+        }
+
+        private void analyzeFile(string filename)
         {
             if (!File.Exists(filename))
             {
                 return;
             }
 
-            CppContext context = new CppContext(filename, mGlobal);
+            if (!string.IsNullOrWhiteSpace(this.PchFilename) && Path.GetFullPath(this.PchFilename, this.ProjectDirectory) == filename)
+            {
+                return;
+            }
 
-            //PInvokeGeneratorConfiguration configuration = new PInvokeGeneratorConfiguration(this.BindingNamespace ?? "TestBindings", Path.ChangeExtension(this.BindingFilename, ".xml"), filename, PInvokeGeneratorOutputMode.Xml, PInvokeGeneratorConfigurationOptions.None);
+            CppContext context = this.createCppContext(filename);
+            if (ExportMacros.All(e => context.FileContent.IndexOf(e) < 0))
+            {
+                return;
+            }
+
+            // clang -Xclang -ast-dump -fsyntax-only --include-directory E:\\Projects\\Tools\\ExportCppToCSharp\\Tests\\TestCpp --include framework.h --include pch.h
+            List<string> commandArguments = new List<string>();
+            commandArguments.AddRange("-std=c++17 -Xclang -ast-dump -fsyntax-only".Split());
+            if (!string.IsNullOrWhiteSpace(this.CompiledPchFilename))
+            {
+                commandArguments.Add("-include-pch");
+                commandArguments.Add(this.CompiledPchFilename);
+            }
+            //string.Join(" ", headers.Select(h => $"--include \"{h}\""))
 
             CXTranslationUnit translationUnit;
-            CXErrorCode errorCode = CXTranslationUnit.TryParse(CXIndex.Create(), filename, "-Xclang -ast-dump -fsyntax-only --include-directory E:\\Projects\\Tools\\ExportCppToCSharp\\Tests\\TestCpp --include framework.h --include pch.h".Split(), new CXUnsavedFile[0], CXTranslationUnit_Flags.CXTranslationUnit_None, out translationUnit);
-            if (CXErrorCode.CXError_Success != errorCode)
+            if (!this.execute(commandArguments, filename, out translationUnit))
             {
                 Tracer.Error($"Failed to parse translation unit for {filename}");
                 return;
@@ -126,39 +377,104 @@ namespace ExportCpp
 
                 this.analyzeCursor(context, cursor);
             }
-
-            foreach (CXCursor cursor in context.Cursors)
-            {
-                Declaration? declaration = Declaration.Create(context, cursor);
-                if (declaration is null)
-                {
-                    continue;
-                }
-
-                context.AppendDeclaration(declaration);
-            }
         }
 
         private void analyzeCursor(CppContext context, CXCursor cursor)
         {
-            //bool hashEquality = cursor.Hash == cursor.Definition.Hash;
-            //bool isFunction = CXCursorKind.CXCursor_FunctionDecl == cursor.kind || CXCursorKind.CXCursor_Constructor == cursor.kind;
-            //if (isFunction == hashEquality)
-            //{
-            //    return;
-            //}
-            if (((CXCursorKind.CXCursor_ClassDecl == cursor.kind || CXCursorKind.CXCursor_StructDecl == cursor.kind || CXCursorKind.CXCursor_EnumDecl == cursor.kind) && cursor.Definition.IsInvalid)
-                || ((CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_CXXMethod == cursor.kind) && !cursor.IsUserProvided))
+            string cursorName = cursor.GetName();
+            if (ExportMacros.Contains(cursorName))
             {
                 return;
             }
 
-            context.AppendCursor(cursor);
+            if (cursor.IsTypeDeclaration() && cursor.Definition.IsInvalid)
+            {
+                return;
+            }
 
+            if ((CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_CXXMethod == cursor.kind) && !cursor.IsUserProvided) // only user provided methods and constructors can be exported
+            {
+                return;
+            }
+
+            if (CXCursorKind.CXCursor_FieldDecl == cursor.kind && CXCursorKind.CXCursor_ClassDecl == cursor.SemanticParent.kind) // do not export class fields, only struct fields and enum constants can be exported
+            {
+                return;
+            }
+
+            if (!this.checkExportMark(context, cursor))
+            {
+                return;
+            }
+
+            Declaration? declaration = Declaration.Create(context, cursor);
+            if (declaration is null)
+            {
+                return;
+            }
+
+            Declaration? record = context.GetDeclaration(declaration.FullName);
+            if (record is null)
+            {
+                context.AppendDeclaration(declaration);
+            }
+            else
+            {
+                record.Merge(declaration);
+            }
+
+            context.PushScope(declaration);
             for (uint i = 0; i < cursor.NumDecls; ++i)
             {
                 this.analyzeCursor(context, cursor.GetDecl(i));
             }
+            //for (uint i = 0; i < cursor.NumChildren; ++i)
+            //{
+            //    this.analyzeCursor(context, cursor.GetChild(i));
+            //}
+            context.PopScope(declaration);
+        }
+
+        private bool checkExportMark(CppContext context, CXCursor cursor)
+        {
+            if (CXCursorKind.CXCursor_Namespace == cursor.kind)
+            {
+                return true;
+            }
+
+            CXCursor previousCursor = cursor.PreviousDecl;
+            while (!previousCursor.IsInvalid && previousCursor.Location.GetFile() != cursor.Location.GetFile())
+            {
+                previousCursor = previousCursor.PreviousDecl;
+            }
+            if (previousCursor.IsInvalid)
+            {
+                previousCursor = cursor.SemanticParent;
+            }
+
+            CXFile file;
+            uint line, column, offset;
+            cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+            int startIndex = context.FileContent.Locate((int)line, (int)column);
+
+            int previousEndIndex = 0;
+            if (!previousCursor.IsInvalid)
+            {
+                previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
+            }
+            if (previousEndIndex > startIndex)
+            {
+                previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
+            }
+
+            string previousContent = context.FileContent.Substring(previousEndIndex + 1, startIndex - previousEndIndex - 1);
+            if (ExportMacros.All(e => previousContent.IndexOf(e) < 0))
+            {
+                return false;
+            }
+            return true;
         }
 
         public void Export()
@@ -180,9 +496,9 @@ namespace ExportCpp
                 {
                     CppExportContext context = new CppExportContext(writer);
 
-                    if (!string.IsNullOrWhiteSpace(this.ExportPchFilename))
+                    if (!string.IsNullOrWhiteSpace(this.PchFilename))
                     {
-                        writer.WriteLine($"#include \"{this.ExportPchFilename}\"");
+                        writer.WriteLine($"#include \"{this.PchFilename}\"");
                     }
                     writer.WriteLine(PLACE_HOLDER_INCLUDES);
 
@@ -404,9 +720,16 @@ namespace ExportCpp
 
             context.Writer.WriteLine();
 
+            bool hasUnsafeArgument = false;
+            List<string> arguments = new List<string>();
+            foreach (Argument argument in declaration.Arguments)
+            {
+                arguments.Add(argument.ToCSharpCode());
+                hasUnsafeArgument = hasUnsafeArgument || argument.Type.IsUnsafe;
+            }
+
             string bindingName;
             Class? parent = declaration.Parent as Class;
-            List<string> arguments = declaration.Arguments.Select(a => a.ToCSharpCode()).ToList();
             if (declaration is Constructor)
             {
                 bindingName = declaration.BindingName;
@@ -418,7 +741,7 @@ namespace ExportCpp
             }
 
             context.Writer.WriteLine(context.TabCount, $"[DllImport(\"{this.LibraryName}\", CallingConvention = CallingConvention.Cdecl)]");
-            context.Writer.WriteLine(context.TabCount, $"static internal extern {declaration.ReturnType.ToCSharpTypeString()} {bindingName}({string.Join(", ", arguments)});");
+            context.Writer.WriteLine(context.TabCount, $"static internal extern {(hasUnsafeArgument ? "unsafe " : "")}{declaration.ReturnType.ToCSharpTypeString()} {bindingName}({string.Join(", ", arguments)});");
 
             ConsoleLogger.Log($"Bind {declaration}");
         }
@@ -462,6 +785,56 @@ namespace ExportCpp
                     this.exportXml(parent, child);
                 }
             }
+        }
+
+        static internal string[] SplitArguments(string argumentsContent)
+        {
+            string contents = argumentsContent.TrimStart(' ', '(').TrimEnd(' ', ')');
+            Stack<char> expectedSymbols = new Stack<char>();
+            List<string> arguments = new List<string>();
+            char c;
+            int s = 0, e = 0;
+            for (; e < contents.Length; ++e)
+            {
+                c = contents[e];
+                if ('(' == c)
+                {
+                    expectedSymbols.Push(')');
+                    continue;
+                }
+                if ('{' == c)
+                {
+                    expectedSymbols.Push('}');
+                    continue;
+                }
+
+                if (expectedSymbols.Count > 0 && expectedSymbols.Peek() == c)
+                {
+                    expectedSymbols.Pop();
+                    continue;
+                }
+
+                if (',' == c)
+                {
+                    arguments.Add(contents.Substring(s, e - s).Trim());
+                    s = e + 1;
+                }
+            }
+            arguments.Add(contents.Substring(s, e - s).Trim());
+
+            Tracer.Assert(0 == expectedSymbols.Count);
+            return arguments.ToArray();
+        }
+
+        static internal string CheckArgumentName(string argumentContent)
+        {
+            if (string.IsNullOrWhiteSpace(argumentContent))
+            {
+                return "";
+            }
+
+            string maybeName = argumentContent.Trim().Split().Last();
+            return maybeName.TrimStart('*', '&');
         }
     }
 }

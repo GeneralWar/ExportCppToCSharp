@@ -8,6 +8,9 @@ namespace TestCpp
 		static internal extern System.IntPtr create_test_class(System.Int32 value);
 
 		[DllImport("TestCpp", CallingConvention = CallingConvention.Cdecl)]
+		static internal extern unsafe void test_class_set_value_change_callback(IntPtr instance, delegate* unmanaged[Cdecl]<nint, int, void> callback);
+
+		[DllImport("TestCpp", CallingConvention = CallingConvention.Cdecl)]
 		static internal extern void test_class_set_value(IntPtr instance, System.Int32 value);
 
 		[DllImport("TestCpp", CallingConvention = CallingConvention.Cdecl)]
