@@ -8,6 +8,7 @@
 		<BaseOutputPath>$(SolutionDir)Output</BaseOutputPath>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
         <Configurations>Debug;Release;Develop</Configurations>
+        <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 	</PropertyGroup>
 
 </Project>

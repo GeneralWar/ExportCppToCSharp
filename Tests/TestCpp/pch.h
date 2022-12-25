@@ -16,6 +16,10 @@
 #define EXPORT_FUNCTION(name, default_return) // export cpp function as #name
 #endif
 
+#ifndef EXPORT_FUNCTION_POINTER
+#define EXPORT_FUNCTION_POINTER
+#endif
+
 #ifndef EXPORT_STRUCT
 #define EXPORT_STRUCT(name) // export cpp class as prefix of constructions, functions and so on
 #endif

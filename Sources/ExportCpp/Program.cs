@@ -1,15 +1,19 @@
 ﻿using General;
 using General.Tracers;
-using System.Reflection;
 
 namespace ExportCpp
 {
     internal class Program
     {
         private const string CPP_PROJECT_EXTENSION = ".vcxproj";
+        private const string SOLUTION_EXTENSION = ".sln";
+
+        private const string ARGUMENT_INCLUDE_DIRECTORY = "include-directory";
+        private const string ARGUMENT_INCLUDE_HEADER_FILE = "include";
+        private const string ARGUMENT_SOLUTION_FILENAME = "solution";
+        private const string ARGUMENT_DEFINE = "define";
 
         private const string ARGUMENT_EXPORT_FILENAME = "export-filename";
-        private const string ARGUMENT_EXPORT_PCH_FILENAME = "export-pch-filename";
         private const string ARGUMENT_BINDING_FILENAME = "binding-filename";
         private const string ARGUMENT_LIBRARY_NAME = "library-name";
         private const string ARGUMENT_BINDING_NAMESPACE = "binding-namespace";
@@ -17,57 +21,51 @@ namespace ExportCpp
 
         static void Main(string[] args)
         {
-            Analyze();
-#if DEVELOP
+            Tracer.onLog += onTracerLog;
+
+            CommandLine commandLine = new CommandLine();
+            commandLine.SetHelpKey("-h|--help");
+            commandLine.SetUsages($"ExportCpp [--command <--argument>] ... project.{CPP_PROJECT_EXTENSION}");
+            commandLine.Require($"--{ARGUMENT_EXPORT_FILENAME}", "Set filename where stores exported C/C++ functions", true);
+            commandLine.Require($"--{ARGUMENT_BINDING_FILENAME}", "Set filename where stores C# binding functions", true);
+            commandLine.Require($"--{ARGUMENT_BINDING_CLASSNAME}", "Set class name where stores C# binding functions", true);
+            commandLine.Require($"--{ARGUMENT_LIBRARY_NAME}", "Set library name used in C# DllImport, it should always equals to C++ dll's name", true);
+            commandLine.Require($"--{ARGUMENT_SOLUTION_FILENAME}", $"Set solution (*{SOLUTION_EXTENSION}) filename", true);
+            commandLine.Option($"--{ARGUMENT_BINDING_NAMESPACE}", $"Set namespace where stores C# binding functions", true);
+            commandLine.Option($"--{ARGUMENT_INCLUDE_DIRECTORY}", $"Pass --include-directory to clang", true);
+            commandLine.Option($"--{ARGUMENT_INCLUDE_HEADER_FILE}", $"Pass --include to clang", true);
+            commandLine.Option($"--{ARGUMENT_DEFINE}", $"Pass -D <macro>=<value> to clang", true);
+            commandLine.Parse(args);
+
+#if !RELEASE
+            try
+            {
+                Analyze(commandLine);
+            }
+            catch (Exception e)
+            {
+                ConsoleLogger.LogException(e);
+            }
+
             Console.ReadKey(true);
+#else
+            Analyze(commandLine);
 #endif
         }
 
-        static private void Analyze()
+        static private void Analyze(CommandLine commandLine)
         {
-            CommandLine commandLine = CommandLine.Create();
-            if (commandLine.Contains("h") || commandLine.Contains("help"))
-            {
-                PrintHelp();
-                return;
-            }
-
-            string? exportFilename = commandLine.GetString(ARGUMENT_EXPORT_FILENAME);
-            if (string.IsNullOrEmpty(exportFilename))
-            {
-                ConsoleLogger.LogWarning("Missing export filename");
-                PrintHelp();
-                return;
-            }
-
-            string? bindingFilename = commandLine.GetString(ARGUMENT_BINDING_FILENAME);
-            if (string.IsNullOrEmpty(bindingFilename))
-            {
-                ConsoleLogger.LogWarning("Missing binding filename");
-                PrintHelp();
-                return;
-            }
-
-            string? libraryName = commandLine.GetString(ARGUMENT_LIBRARY_NAME);
-            if (string.IsNullOrEmpty(libraryName))
-            {
-                ConsoleLogger.LogWarning("Missing library filename");
-                PrintHelp();
-                return;
-            }
-
-            string? bindingClassname = commandLine.GetString(ARGUMENT_BINDING_CLASSNAME);
-            if (string.IsNullOrWhiteSpace(bindingClassname))
-            {
-                ConsoleLogger.LogWarning("Missing binding classname");
-                PrintHelp();
-                return;
-            }
+            string exportFilename = commandLine.GetString(ARGUMENT_EXPORT_FILENAME) ?? throw new InvalidOperationException("Missing export filename");
+            string bindingFilename = commandLine.GetString(ARGUMENT_BINDING_FILENAME) ?? throw new InvalidOperationException("Missing binding filename");
+            string libraryName = commandLine.GetString(ARGUMENT_LIBRARY_NAME) ?? throw new InvalidOperationException("Missing library filename");
+            string bindingClassname = commandLine.GetString(ARGUMENT_BINDING_CLASSNAME) ?? throw new InvalidOperationException("Missing binding classname");
+            string solutionFilename = commandLine.GetString(ARGUMENT_SOLUTION_FILENAME) ?? throw new InvalidOperationException($"Missing solution filename (*{SOLUTION_EXTENSION})");
 
             string? projectFilename = commandLine.ExtraArguments.Where(e => e.EndsWith(CPP_PROJECT_EXTENSION)).FirstOrDefault();
             if (string.IsNullOrEmpty(projectFilename))
             {
-                PrintHelp();
+                ConsoleLogger.LogWarning($"Missing C++ project filename *{CPP_PROJECT_EXTENSION}");
+                commandLine.PrintHelp();
                 return;
             }
 
@@ -77,20 +75,34 @@ namespace ExportCpp
                 return;
             }
 
-            ConsoleLogger.Log($"Try to analyze project {projectFilename}");
-            CppAnalyzer analyzer = new CppAnalyzer(Path.GetFullPath(projectFilename), Path.GetFullPath(exportFilename), Path.GetFullPath(bindingFilename), libraryName, bindingClassname);
+            CppAnalyzer analyzer = new CppAnalyzer(Path.GetFullPath(solutionFilename), Path.GetFullPath(projectFilename), Path.GetFullPath(exportFilename), Path.GetFullPath(bindingFilename), libraryName, bindingClassname);
             analyzer.SetNamespace(commandLine.GetString(ARGUMENT_BINDING_NAMESPACE));
-            analyzer.SetExportPchFilename(commandLine.GetString(ARGUMENT_EXPORT_PCH_FILENAME));
+            analyzer.IncludeDirectories.AddRange(commandLine.GetStringArray(ARGUMENT_INCLUDE_DIRECTORY).Select(d => PathUtility.MakeDirectoryStandard(d)));
+            analyzer.IncludeHeaderFiles.AddRange(commandLine.GetStringArray(ARGUMENT_INCLUDE_HEADER_FILE));
+            analyzer.DefineMacros.AddRange(commandLine.GetStringArray(ARGUMENT_DEFINE));
             analyzer.Analyze();
-            analyzer.Export();
             analyzer.ExportXml();
+            analyzer.Export();
             analyzer.Bind();
         }
 
-        static private void PrintHelp()
+        private static void onTracerLog(Tracer.LogMessage message)
         {
-            Assembly current = typeof(Program).Assembly;
-            ConsoleLogger.Log($"Usage: {current.GetName().Name} [-h|--help] <--{ARGUMENT_EXPORT_FILENAME}> filename> <--{ARGUMENT_EXPORT_PCH_FILENAME} filename> <--{ARGUMENT_BINDING_FILENAME}> filename> <--{ARGUMENT_LIBRARY_NAME} name> [--{ARGUMENT_BINDING_NAMESPACE} namespace] <--{ARGUMENT_BINDING_CLASSNAME}> classname> <*{CPP_PROJECT_EXTENSION}> ");
+            if (string.IsNullOrWhiteSpace(message.message))
+            {
+                return;
+            }
+
+            switch (message.level)
+            {
+                case Tracer.LogLevel.Warning:
+                    ConsoleLogger.LogWarning(message.message);
+                    break;
+                case Tracer.LogLevel.Error:
+                case Tracer.LogLevel.Exception:
+                    ConsoleLogger.LogError(message.message);
+                    break;
+            }
         }
     }
 }

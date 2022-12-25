@@ -2,7 +2,15 @@
   "profiles": {
     "ExportCpp": {
       "commandName": "Project",
-      "commandLineArgs": "--export-filename $(SolutionDir)../Tests/TestCpp/Exports.cpp --export-pch-filename pch.h --binding-filename $(SolutionDir)../Tests/TestCSharp/Bindings.cs --library-name TestCpp --binding-namespace TestCpp --binding-classname TestBindings $(SolutionDir)../Tests/TestCpp/TestCpp.vcxproj"
+      "commandLineArgs": "--solution \"E:/Projects/CrossEngine/Private/CrossEngine.sln\" --include framework.h --include pch.h --export-filename $(SolutionDir)../Tests/TestCpp/Exports.cpp --export-pch-filename pch.h --binding-filename $(SolutionDir)../Tests/TestCSharp/Bindings.cs --library-name TestCpp --binding-namespace TestCpp --binding-classname TestBindings $(SolutionDir)../Tests/TestCpp/TestCpp.vcxproj"
+    },
+    "CrossEngine": {
+      "commandName": "Project",
+      "commandLineArgs": "--solution \"E:/Projects/CrossEngine/Private/CrossEngine.sln\" --export-filename E:/Projects/CrossEngine/TestExports/Exports.cpp --export-pch-filename pch.h --binding-filename E:/Projects/CrossEngine/TestExports/Bindings.cs --library-name CrossEngine --binding-namespace CrossEngine --binding-classname Bindings --define GENERAL_EXPORTS E:/Projects/CrossEngine/Private/Runtime/C++/Engine/Engine.vcxproj"
+    },
+    "Help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
     }
   }
 }
