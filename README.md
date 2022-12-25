@@ -102,10 +102,9 @@ static internal extern System.Int32 test_class_substract(IntPtr instance, System
 
 ```
 >clang -v
-clang version 14.0.6
+clang version 15.0.0
 Target: x86_64-pc-windows-msvc
 Thread model: posix
-InstalledDir: E:\Program Files\LLVM\bin
 ```
 
 ## Suggestions welcome
