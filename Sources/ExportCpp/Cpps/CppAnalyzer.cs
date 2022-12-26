@@ -1,6 +1,7 @@
 ﻿using ClangSharp.Interop;
 using General;
 using General.Tracers;
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Xml;
 
@@ -44,6 +45,8 @@ namespace ExportCpp
         public HashSet<string> IncludeDirectories { get; init; } = new HashSet<string>();
         public HashSet<string> IncludeHeaderFiles { get; init; } = new HashSet<string>();
         public HashSet<string> DefineMacros { get; init; } = new HashSet<string>();
+
+        public HashSet<string> ProcessedFiles { get; init; } = new HashSet<string>();
 
         private Namespace mGlobal;
 
@@ -146,15 +149,14 @@ namespace ExportCpp
             //ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
             ConsoleLogger.Log($"Try to analyze {filename}");
             CXErrorCode errorCode = CXTranslationUnit.TryParse(CXIndex.Create(), filename, new ReadOnlySpan<string>(argumentList.ToArray()), new ReadOnlySpan<CXUnsavedFile>(unsavedFiles.ToArray()), CXTranslationUnit_Flags.CXTranslationUnit_None, out translationUnit);
-            if (CXErrorCode.CXError_Success != errorCode)
+            bool failed = CXErrorCode.CXError_Success != errorCode;
+            if (failed || translationUnit.DiagnosticSet.Count > 0)
             {
-                ConsoleLogger.LogError($"{errorCode} clang {string.Join(" ", argumentList)} \"{filename}\"");
-                return false;
-            }
+                if (failed)
+                {
+                    ConsoleLogger.LogError($"{errorCode} clang {string.Join(" ", argumentList)} \"{filename}\"");
+                }
 
-            if (translationUnit.DiagnosticSet.Count > 0)
-            {
-                bool failed = false;
                 for (uint i = 0; i < translationUnit.DiagnosticSet.Count; ++i)
                 {
                     CXDiagnostic diagnostic = translationUnit.GetDiagnostic(i);
@@ -173,13 +175,8 @@ namespace ExportCpp
                             break;
                     }
                 }
-                if (failed)
-                {
-                    return false;
-                }
             }
-
-            return true;
+            return !failed;
         }
 
         private bool checkPrecompiledHeader(XmlDocument document)
@@ -235,12 +232,13 @@ namespace ExportCpp
                             continue;
                         }
 
-                        CppContext context = this.createCppContext(realPath);
+                        CppContext context = this.createCppContext(this.checkFullPathForProjectFile(realPath));
                         if (ExportMacros.All(e => context.FileContent.IndexOf(e) < 0))
                         {
                             continue;
                         }
                         this.analyzeCursor(context, cursor);
+                        this.ProcessedFiles.Add(context.Filename);
                     }
                 }
             }
@@ -328,6 +326,12 @@ namespace ExportCpp
                 return;
             }
 
+            filename = this.checkFullPathForProjectFile(filename);
+            if (this.ProcessedFiles.Contains(filename))
+            {
+                return;
+            }
+
             if (!string.IsNullOrWhiteSpace(this.PchFilename) && Path.GetFullPath(this.PchFilename, this.ProjectDirectory) == filename)
             {
                 return;
@@ -341,6 +345,11 @@ namespace ExportCpp
 
             // clang -Xclang -ast-dump -fsyntax-only --include-directory E:\\Projects\\Tools\\ExportCppToCSharp\\Tests\\TestCpp --include framework.h --include pch.h
             List<string> commandArguments = new List<string>();
+            if (filename.EndsWith(".h"))
+            {
+                commandArguments.Add("-x");
+                commandArguments.Add("c++");
+            }
             commandArguments.AddRange("-std=c++17 -Xclang -ast-dump -fsyntax-only".Split());
             if (!string.IsNullOrWhiteSpace(this.CompiledPchFilename))
             {
@@ -383,6 +392,11 @@ namespace ExportCpp
         {
             string cursorName = cursor.GetName();
             if (ExportMacros.Contains(cursorName))
+            {
+                return;
+            }
+
+            if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind) 
             {
                 return;
             }
@@ -437,39 +451,12 @@ namespace ExportCpp
 
         private bool checkExportMark(CppContext context, CXCursor cursor)
         {
-            if (CXCursorKind.CXCursor_Namespace == cursor.kind)
+            if (CXCursorKind.CXCursor_Namespace == cursor.kind || CXCursorKind.CXCursor_EnumConstantDecl == cursor.kind)
             {
                 return true;
             }
 
-            CXCursor previousCursor = cursor.PreviousDecl;
-            while (!previousCursor.IsInvalid && previousCursor.Location.GetFile() != cursor.Location.GetFile())
-            {
-                previousCursor = previousCursor.PreviousDecl;
-            }
-            if (previousCursor.IsInvalid)
-            {
-                previousCursor = cursor.SemanticParent;
-            }
-
-            CXFile file;
-            uint line, column, offset;
-            cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-            int startIndex = context.FileContent.Locate((int)line, (int)column);
-
-            int previousEndIndex = 0;
-            if (!previousCursor.IsInvalid)
-            {
-                previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
-            }
-            if (previousEndIndex > startIndex)
-            {
-                previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
-            }
-
-            string previousContent = context.FileContent.Substring(previousEndIndex + 1, startIndex - previousEndIndex - 1);
+            string previousContent = CheckContentFromPreviousCursor(context, cursor);
             if (ExportMacros.All(e => previousContent.IndexOf(e) < 0))
             {
                 return false;
@@ -719,29 +706,8 @@ namespace ExportCpp
             }
 
             context.Writer.WriteLine();
-
-            bool hasUnsafeArgument = false;
-            List<string> arguments = new List<string>();
-            foreach (Argument argument in declaration.Arguments)
-            {
-                arguments.Add(argument.ToCSharpCode());
-                hasUnsafeArgument = hasUnsafeArgument || argument.Type.IsUnsafe;
-            }
-
-            string bindingName;
-            Class? parent = declaration.Parent as Class;
-            if (declaration is Constructor)
-            {
-                bindingName = declaration.BindingName;
-            }
-            else
-            {
-                arguments.Insert(0, $"{nameof(IntPtr)} instance");
-                bindingName = parent is null ? declaration.BindingName : $"{parent.BindingPrefix}_{declaration.BindingName}";
-            }
-
             context.Writer.WriteLine(context.TabCount, $"[DllImport(\"{this.LibraryName}\", CallingConvention = CallingConvention.Cdecl)]");
-            context.Writer.WriteLine(context.TabCount, $"static internal extern {(hasUnsafeArgument ? "unsafe " : "")}{declaration.ReturnType.ToCSharpTypeString()} {bindingName}({string.Join(", ", arguments)});");
+            context.Writer.WriteLine(context.TabCount, declaration.MakeCSharpBindingDeclaration());
 
             ConsoleLogger.Log($"Bind {declaration}");
         }
@@ -787,9 +753,56 @@ namespace ExportCpp
             }
         }
 
+        static internal CXCursor CheckPreviousCursor(CppContext context, CXCursor cursor, CXFile expectedFile)
+        {
+            CXCursor previousCursor = cursor.PreviousDecl;
+            if (previousCursor.IsExposedDeclaration() && previousCursor.Location.GetFile() == expectedFile)
+            {
+                return previousCursor;
+            }
+
+            CXCursor parent = cursor.SemanticParent;
+            int siblingIndex = cursor.GetSiblingIndex();
+            previousCursor = 0 == siblingIndex ? parent : parent.GetDecl((uint)siblingIndex - 1);
+            if (!previousCursor.IsExposedDeclaration())
+            {
+                return CheckPreviousCursor(context, previousCursor, expectedFile);
+            }
+            if (previousCursor.Location.GetFile() != expectedFile)
+            {
+                return CheckPreviousCursor(context, previousCursor, expectedFile);
+            }
+            return previousCursor;
+        }
+
+        static internal string CheckContentFromPreviousCursor(CppContext context, CXCursor cursor)
+        {
+            CXCursor previousCursor = CheckPreviousCursor(context, cursor, cursor.Location.GetFile());
+            Tracer.Assert(previousCursor.Location.GetFile() == cursor.Location.GetFile());
+
+            CXFile file;
+            uint line, column, offset;
+            cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+            int startIndex = context.FileContent.Locate((int)line, (int)column);
+
+            int previousEndIndex = 0;
+            if (!previousCursor.IsInvalid)
+            {
+                previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
+            }
+            if (previousEndIndex > startIndex)
+            {
+                previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
+            }
+
+            return context.FileContent.Substring(previousEndIndex, startIndex - previousEndIndex);
+        }
+
         static internal string[] SplitArguments(string argumentsContent)
         {
-            string contents = argumentsContent.TrimStart(' ', '(').TrimEnd(' ', ')');
+            string contents = argumentsContent.TrimStart(' ', '(').TrimEnd(' ', ')', ';');
             Stack<char> expectedSymbols = new Stack<char>();
             List<string> arguments = new List<string>();
             char c;

@@ -25,7 +25,7 @@
 #endif
 
 #ifndef EXPORT_ENUM
-#define EXPORT_ENUM(prefix) // export cpp class as prefix of constructions, functions and so on
+#define EXPORT_ENUM(name) // export cpp enum with name
 #endif
 
 #ifndef EXPORT_ENUM_VALUE

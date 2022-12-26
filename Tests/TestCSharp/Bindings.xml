@@ -1,16 +1,20 @@
 <Export>
   <Namespace Name="TestNamespace" FullName="TestNamespace">
-    <Enum Name="TestEnumClass" FullName="TestNamespace::TestEnumClass" />
+    <Enum Name="TestEnumClass" FullName="TestNamespace::TestEnumClass">
+      <EnumConstant Name="Enum1" Value="0" />
+      <EnumConstant Name="Enum2" Value="1" />
+      <EnumConstant Name="Enum3" Value="2" />
+    </Enum>
     <Class Name="TestClass" FullName="TestNamespace::TestClass" BindingPrefix="test_class">
       <FunctionPointer Name="ValueChange" ReturnType="System.Void" BindingName="">
         <Argument Name="instance" CppType="TestNamespace::TestClass" Decorations="Pointer" />
-        <Argument Name="value" CppType="System.Int32" Decorations="" />
+        <Argument Name="value" CppType="System.Int32" />
       </FunctionPointer>
       <Constructor Name="TestClass" ReturnType="TestNamespace::TestClass" BindingName="create_test_class">
         <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
       </Constructor>
       <Function Name="SetValueChangeCallback" ReturnType="System.Void" BindingName="set_value_change_callback">
-        <Argument Name="callback" CppType="TestNamespace::TestClass::ValueChange" Decorations="" />
+        <Argument Name="callback" CppType="TestNamespace::TestClass::ValueChange" />
       </Function>
       <Function Name="SetValue" ReturnType="System.Void" BindingName="set_value">
         <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />

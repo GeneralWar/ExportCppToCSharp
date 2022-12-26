@@ -6,7 +6,7 @@ namespace ExportCpp.Cpps
 {
     internal class CppType : Type
     {
-        public Declaration Declaration { get; init; }
+        public ITypeDeclaration Declaration { get; init; }
 
         public override Assembly Assembly => throw new NotImplementedException();
 
@@ -29,9 +29,9 @@ namespace ExportCpp.Cpps
         private bool mIsPointer = false;
         protected override bool IsPointerImpl() => mIsPointer;
 
-        public CppType(Declaration declaration) : this(declaration, false) { }
+        public CppType(ITypeDeclaration declaration) : this(declaration, false) { }
 
-        private CppType(Declaration declaration, bool isPointer)
+        private CppType(ITypeDeclaration declaration, bool isPointer)
         {
             this.Declaration = declaration;
             mIsPointer = isPointer;
@@ -42,14 +42,9 @@ namespace ExportCpp.Cpps
             return this.IsPointer ? this : new CppType(this.Declaration, true);
         }
 
-        public Type ToCSharpType()
-        {
-            return (this.Declaration as ITypeDeclaration)?.Type.CSharpType ?? typeof(IntPtr);
-        }
-
         public string ToCSharpTypeString()
         {
-            return (this.Declaration as ITypeDeclaration)?.Type.CSharpTypeString ?? throw new InvalidOperationException();
+            return this.Declaration.Type.CSharpTypeString;
         }
 
         public override ConstructorInfo[] GetConstructors(BindingFlags bindingAttr)
