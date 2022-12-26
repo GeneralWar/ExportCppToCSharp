@@ -4,17 +4,9 @@ namespace ExportCpp
 {
     static internal partial class Extensions
     {
-        static public Type ToCSharpType(this Type type)
-        {
-            //CppType? cppType = type as CppType;
-            //return cppType is null ? type : typeof(IntPtr);
-            return (type as CppType)?.ToCSharpType() ?? type;
-        }
-
         static public string ToCSharpTypeString(this Type type)
         {
-            Type realType = type.ToCSharpType();
-            if (typeof(void) == realType)
+            if (typeof(void) == type)
             {
                 return "void";
             }
@@ -25,7 +17,7 @@ namespace ExportCpp
                 return cppType.ToCSharpTypeString();
             }
 
-            return realType.FullName ?? throw new InvalidOperationException();
+            return type.ToShortString() ?? type.FullName ?? throw new InvalidOperationException();
         }
 
         static public string ToCSharpUnmanagedTypeString(this Type type)
@@ -33,7 +25,7 @@ namespace ExportCpp
             CppType? cppType = type as CppType;
             if (cppType is not null)
             {
-                return cppType.IsPointer ? (cppType.FullName + "*") : (cppType.FullName ?? throw new InvalidOperationException());
+                return cppType.Declaration.Type.CSharpUnmanagedTypeString;
             }
 
             return type.ToUnmanagedString();
@@ -47,7 +39,7 @@ namespace ExportCpp
                 return cppType.IsPointer ? (cppType.FullName + "*") : (cppType.FullName ?? throw new InvalidOperationException());
             }
 
-            return type.ToCppString();
+            return type.ToCppString() ?? throw new InvalidOperationException();
         }
     }
 }

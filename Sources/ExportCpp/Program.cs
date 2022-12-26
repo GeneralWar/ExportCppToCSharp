@@ -37,7 +37,7 @@ namespace ExportCpp
             commandLine.Option($"--{ARGUMENT_DEFINE}", $"Pass -D <macro>=<value> to clang", true);
             commandLine.Parse(args);
 
-#if !RELEASE
+#if RELEASE
             try
             {
                 Analyze(commandLine);
@@ -46,10 +46,9 @@ namespace ExportCpp
             {
                 ConsoleLogger.LogException(e);
             }
-
-            Console.ReadKey(true);
 #else
             Analyze(commandLine);
+            Console.ReadKey(true);
 #endif
         }
 

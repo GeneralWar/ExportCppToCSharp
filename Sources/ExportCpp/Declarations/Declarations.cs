@@ -14,27 +14,30 @@ namespace ExportCpp
         /// declared cpp type
         /// </summary>
         public Type DeclaredType { get; }
-        public Type CSharpType { get; }
         public string CSharpTypeString { get; }
+        public string CSharpUnmanagedTypeString { get; }
 
         public bool IsUnsafe => this.CSharpTypeString.Contains('*') || this.CSharpTypeString.Contains("unmanaged") || (this.DeclaredType as CppType)?.Declaration is FunctionPointer;
 
-        public DeclarationType(CXType type, Type declaredType, Type csharpType, string csharpTypeString)
+        public DeclarationType(CXType type, Type declaredType, string csharpTypeString, string csharpUnmanagedTypeString)
         {
             this.CXType = type;
-            this.CSharpType = csharpType;
             this.DeclaredType = declaredType;
             this.CSharpTypeString = csharpTypeString;
+            this.CSharpUnmanagedTypeString = csharpUnmanagedTypeString;
         }
 
         public override string ToString()
         {
-            return $"{this.DeclaredType.FullName} -> {this.CSharpType.FullName}({this.CSharpTypeString})";
+            return $"{this.DeclaredType.FullName} -> {this.CSharpTypeString}";
         }
     }
 
     interface ITypeDeclaration
     {
+        string Name { get; }
+        string FullName { get; }
+
         DeclarationType Type { get; }
 
         bool MatchTypeName(string name);
@@ -53,10 +56,10 @@ namespace ExportCpp
         public string FullName { get; private set; }
         public string DisplayString { get; private set; }
 
-        public string Content { get; private set; }
+        public string Content { get; protected set; }
 
         public int Index { get; private set; }
-        public int CloseIndex { get; private set; }
+        public int CloseIndex { get; protected set; }
 
         public abstract string? ExportMacro { get; }
         public bool ShouldExport { get; private set; }
@@ -102,27 +105,27 @@ namespace ExportCpp
                 return false;
             }
 
-            int previousCloseIndex = Math.Max(context.FileContent.LastIndexOfAny("{});".ToCharArray(), this.Index), 0);
-            int exportIndex = context.FileContent.LastIndexOf(this.ExportMacro, previousCloseIndex);
+            string previousContent = CppAnalyzer.CheckContentFromPreviousCursor(context, this.Cursor);
+            int exportIndex = previousContent.LastIndexOf(this.ExportMacro);
             if (exportIndex < 0)
             {
                 return false;
             }
 
-            int openIndex = context.FileContent.IndexOf('(', exportIndex);
+            int openIndex = previousContent.IndexOf('(', exportIndex);
             if (-1 == openIndex)
             {
                 return false;
             }
 
-            int closeIndex = context.FileContent.LastIndexOf(')', this.Index, this.Index - openIndex);
+            int closeIndex = previousContent.LastIndexOf(')');
             if (-1 == closeIndex)
             {
                 return false;
             }
 
-            string exportContent = this.ExportContent = context.FileContent.Substring(openIndex + 1, closeIndex - openIndex - 1);
-            string[] exportParts = this.ExportContents = exportContent.Split(',').Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToArray();
+            string exportContent = this.ExportContent = previousContent.Substring(openIndex + 1, closeIndex - openIndex - 1);
+            string[] exportParts = this.ExportContents = CppAnalyzer.SplitArguments(exportContent);
             this.checkExportContents(exportParts);
             this.ShouldExport = true;
             return true;
@@ -231,7 +234,7 @@ namespace ExportCpp
             return cursor.DisplayName.CString == name && kind == cursor.kind ? cursor : CXCursor.Null;
         }
 
-        static private Declaration? findDeclarationUpwards(Declaration? start, string name)
+        static internal Declaration? FindDeclarationUpwards(Declaration? start, string name)
         {
             for (Declaration? declaration = start; declaration is not null; declaration = declaration.Parent)
             {
@@ -262,8 +265,8 @@ namespace ExportCpp
                 return this;
             }
 
-            Declaration? declaration = findDeclarationUpwards(this.Parent, name);
-            declaration ??= findDeclarationUpwards(context.CurrentScope, name);
+            Declaration? declaration = FindDeclarationUpwards(this.Parent, name);
+            declaration ??= FindDeclarationUpwards(context.CurrentScope, name);
             if (declaration is null)
             {
                 CXCursor cursor = this.findCursorUpward(this.Cursor, CXCursorKind.CXCursor_ClassDecl, name);
@@ -275,21 +278,47 @@ namespace ExportCpp
             return declaration;
         }
 
-        internal Type? FindType(CppContext context, string name)
+        internal Type? FindType(CppContext context, CXType type)
         {
-            string safename = name.TrimEnd('&', '*').TrimEnd();
-            switch (safename)
+            if (CXTypeKind.CXType_Invalid == type.kind)
             {
-                case "void": return typeof(void);
-                case "int": return typeof(int);
-                case "float": return typeof(float);
-                case "double": return typeof(double);
+                return null;
             }
 
+            if (CXTypeKind.CXType_Pointer == type.kind)
+            {
+                /*if (CXTypeKind.CXType_Record == type.PointeeType.kind)
+                {
+                    return typeof(void*);
+                }
+                else */
+                if (CXTypeKind.CXType_FirstBuiltin <= type.PointeeType.kind && type.PointeeType.kind <= CXTypeKind.CXType_LastBuiltin)
+                {
+                    return type.PointeeType.ToBuiltinType().MakePointerType();
+                }
+            }
+
+            if (CXTypeKind.CXType_FirstBuiltin <= type.kind && type.kind <= CXTypeKind.CXType_LastBuiltin)
+            {
+                return type.ToBuiltinType();
+            }
+
+            return this.FindType(context, type.GetOriginalTypeName());
+        }
+
+        internal Type? FindType(CppContext context, string name)
+        {
+            Type? type = name.TypeFromCppString();
+            if (type is not null)
+            {
+                return type;
+            }
+
+            string safename = name.Trim();
             Declaration? declaration = this.findTypeUpward(context, safename);
-            declaration ??= this.Root?.GetDeclaration(name);
-            declaration ??= this.Root == context.Global ? null : context.Global.GetDeclaration(name);
-            declaration ??= context.GetDeclaration(name);
+            declaration ??= this.Root?.GetDeclaration(safename);
+            declaration ??= this.Root == context.Global ? null : context.Global.GetDeclaration(safename);
+            declaration ??= context.GetDeclaration(safename);
             return (declaration as ITypeDeclaration)?.Type.DeclaredType;
         }
 
@@ -427,11 +456,8 @@ namespace ExportCpp
 
         public Argument(CppContext context, CXCursor cursor, CXType type) : base(context, cursor)
         {
-            //this.TypeString = this.CXType.GetOriginalTypeName();
-            string typeString = type.GetOriginalTypeName();
-            Type declaredType = this.FindType(context, typeString) ?? throw new InvalidOperationException($"There is no type {typeString}");
-            Type csharpType = declaredType.ToCSharpType();
-            this.Type = new DeclarationType(type, declaredType, csharpType, csharpType.ToCSharpTypeString());
+            Type declaredType = this.FindType(context, type) ?? throw new InvalidOperationException($"There is no type {type.GetOriginalTypeName()}");
+            this.Type = new DeclarationType(type, declaredType, declaredType.ToCSharpTypeString(), declaredType.ToCSharpUnmanagedTypeString());
         }
 
         protected override void makeXml(XmlElement element)
@@ -451,7 +477,10 @@ namespace ExportCpp
             {
                 decorations.Add("RValueReference");
             }
-            element.SetAttribute(KEY_DECORATIONS, string.Join('|', decorations));
+            if (decorations.Count > 0)
+            {
+                element.SetAttribute(KEY_DECORATIONS, string.Join('|', decorations));
+            }
         }
 
         public override string ToCppCode()
@@ -462,6 +491,11 @@ namespace ExportCpp
         public override string ToCSharpCode()
         {
             return $"{this.Type.DeclaredType.ToCSharpTypeString()} {this.Name}";
+        }
+
+        public override string ToString()
+        {
+            return $"{nameof(Argument)} {this.Type.CXType.Spelling} {this.Name}";
         }
     }
 
@@ -486,7 +520,7 @@ namespace ExportCpp
 
         public Function(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            this.ReturnType = this.FindType(context, cursor.ReturnType.GetOriginalTypeName()) ?? throw new InvalidOperationException($"There is no type {cursor.ReturnType.GetOriginalTypeName()}"); ;
+            this.ReturnType = this.checkReturnType(context);
 
             List<Argument> arguments = new List<Argument>();
             for (uint i = 0; i < cursor.NumArguments; ++i)
@@ -496,6 +530,7 @@ namespace ExportCpp
             this.Arguments = arguments.ToArray();
         }
 
+        protected virtual Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.ReturnType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.ReturnType.GetOriginalTypeName()}");
         protected override string checkFullName() => $"{this.Cursor.SemanticParent.GetFullTypeName()}::{this.Name}";
 
         protected override void makeXml(XmlElement element)
@@ -566,6 +601,36 @@ namespace ExportCpp
             return contents;
         }
 
+        public string MakeCSharpBindingDeclaration()
+        {
+            if (string.IsNullOrWhiteSpace(this.BindingName))
+            {
+                throw new InvalidOperationException("Function has no export or binding flag");
+            }
+
+            bool hasUnsafeArgument = false;
+            List<string> arguments = new List<string>();
+            foreach (Argument argument in this.Arguments)
+            {
+                arguments.Add(argument.ToCSharpCode());
+                hasUnsafeArgument = hasUnsafeArgument || argument.Type.IsUnsafe;
+            }
+
+            string bindingName;
+            Class? parent = this.Parent as Class;
+            if (this is Constructor)
+            {
+                bindingName = this.BindingName;
+            }
+            else
+            {
+                arguments.Insert(0, $"{typeof(IntPtr).ToCSharpTypeString()} instance");
+                bindingName = parent is null ? this.BindingName : $"{parent.BindingPrefix}_{this.BindingName}";
+            }
+
+            return $"static internal extern {(hasUnsafeArgument ? "unsafe " : "")}{this.ReturnType.ToCSharpTypeString()} {bindingName}({string.Join(", ", arguments)});";
+        }
+
         public override string ToString()
         {
             return $"{base.ToString()}, return: {this.ReturnType.FullName}";
@@ -583,7 +648,13 @@ namespace ExportCpp
         public FunctionPointer(CppContext context, CXCursor cursor) : base(context, cursor)
         {
             CXType pointeeType = cursor.Type.PointeeType;
-            this.ReturnType = this.FindType(context, pointeeType.ResultType.GetOriginalTypeName()) ?? throw new InvalidOperationException($"There is no type {cursor.ReturnType.GetOriginalTypeName()}");
+            // fix end index and content, it will be wrong if call convention is set
+            int closeIndex = context.FileContent.IndexOf(';', this.Index + 1);
+            if (this.CloseIndex != closeIndex)
+            {
+                this.CloseIndex = closeIndex;
+                this.Content = this.Index > 0 && this.CloseIndex > this.Index ? context.FileContent.Substring(this.Index, this.CloseIndex - this.Index + 1) : "";
+            }
 
             int argumentCount = pointeeType.NumArgTypes;
             string csharpTypeString = $"delegate* unmanaged[Cdecl]<{this.ReturnType.ToUnmanagedString()}>";
@@ -597,7 +668,7 @@ namespace ExportCpp
                 for (uint i = 0; i < pointeeType.NumArgTypes; ++i)
                 {
                     Argument argument = new Argument(context, pointeeType.GetArgType(i), CppAnalyzer.CheckArgumentName(argumentContents[i]));
-                    unmanagedArguments.Add(argument.Type.CSharpType.ToCSharpUnmanagedTypeString());
+                    unmanagedArguments.Add(argument.Type.CSharpUnmanagedTypeString);
                     arguments.Add(argument);
                 }
                 this.Arguments = arguments.ToArray();
@@ -605,8 +676,9 @@ namespace ExportCpp
                 csharpTypeString = $"delegate* unmanaged[Cdecl]<{string.Join(", ", unmanagedArguments)}, {this.ReturnType.ToUnmanagedString()}>";
             }
 
-            this.Type = new DeclarationType(cursor.Type, new CppType(this), typeof(IntPtr), csharpTypeString);
+            this.Type = new DeclarationType(cursor.Type, new CppType(this), csharpTypeString, csharpTypeString);
         }
+        protected override Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.Type.PointeeType.ResultType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.Type.PointeeType.ResultType.GetOriginalTypeName()}");
 
         bool ITypeDeclaration.MatchTypeName(string name)
         {
@@ -657,7 +729,7 @@ namespace ExportCpp
 
         public Class(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            this.Type = new DeclarationType(cursor.Type, new CppType(this), typeof(IntPtr), typeof(IntPtr).FullName ?? throw new InvalidOperationException());
+            this.Type = new DeclarationType(cursor.Type, new CppType(this), typeof(IntPtr).ToCSharpTypeString(), typeof(IntPtr).ToCSharpUnmanagedTypeString());
 
             if (this.ExportContents.Length > INDEX_EXPORT_AS)
             {
@@ -668,7 +740,7 @@ namespace ExportCpp
 
         internal Class(string name, Type csharpType, Type exportAsType) : base(name)
         {
-            this.Type = new DeclarationType(new CXType(), new CppType(this), csharpType, csharpType.FullName ?? throw new InvalidOperationException());
+            this.Type = new DeclarationType(new CXType(), new CppType(this), csharpType.ToCSharpTypeString(), csharpType.ToCSharpUnmanagedTypeString());
             this.ExportAsType = exportAsType;
         }
 
@@ -723,6 +795,7 @@ namespace ExportCpp
 
         public Field(CppContext context, CXCursor cursor) : base(context, cursor)
         {
+            // check if cursor should be replaced by type
             this.Type = this.FindType(context, cursor.GetFullTypeName()) ?? throw new InvalidOperationException($"There is no type {cursor.GetFullTypeName()}"); ;
         }
 
@@ -736,13 +809,19 @@ namespace ExportCpp
 
     internal class Enum : DeclarationCollection, ITypeDeclaration
     {
+        private const int INDEX_NAME = 0;
+
         public override string? ExportMacro => CppAnalyzer.ExportEnumMacro;
 
         public string[] Values { get; private set; } = new string[0];
 
-        public DeclarationType Type { get; init; } = new DeclarationType(new CXType(), null, null, null);
+        public DeclarationType Type { get; init; }
 
-        public Enum(CppContext context, CXCursor cursor) : base(context, cursor) { }
+        public Enum(CppContext context, CXCursor cursor) : base(context, cursor)
+        {
+            string csharpTypeString = this.ExportContents.Length > INDEX_NAME ? this.ExportContents[INDEX_NAME] : "";
+            this.Type = new DeclarationType(cursor.Type, new CppType(this), csharpTypeString, csharpTypeString);
+        }
 
         protected override Type? getDeclaredType() => throw new NotImplementedException();
 
@@ -780,6 +859,11 @@ namespace ExportCpp
         protected override void makeXml(XmlElement element)
         {
             element.SetAttribute(nameof(this.Value), this.Value);
+        }
+
+        public override string ToCSharpCode()
+        {
+            return $"{this.Name} = {this.Value}";
         }
     }
 }
