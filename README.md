@@ -122,4 +122,6 @@ Target: x86_64-pc-windows-msvc
 Thread model: posix
 ```
 
+***It only works on clang version 15.x***
+
 ## Suggestions welcome

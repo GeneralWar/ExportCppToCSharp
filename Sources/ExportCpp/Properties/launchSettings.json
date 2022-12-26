@@ -2,7 +2,10 @@
   "profiles": {
     "ExportCpp": {
       "commandName": "Project",
-      "commandLineArgs": "--solution \"E:/Projects/CrossEngine/Private/CrossEngine.sln\" --include framework.h --include pch.h --export-filename $(SolutionDir)../Tests/TestCpp/Exports.cpp --export-pch-filename pch.h --binding-filename $(SolutionDir)../Tests/TestCSharp/Bindings.cs --library-name TestCpp --binding-namespace TestCpp --binding-classname TestBindings $(SolutionDir)../Tests/TestCpp/TestCpp.vcxproj"
+      "commandLineArgs": "--solution \"E:/Projects/CrossEngine/Private/CrossEngine.sln\" --include framework.h --include pch.h --export-filename $(SolutionDir)../Tests/TestCpp/Exports.cpp --export-pch-filename pch.h --binding-filename $(SolutionDir)../Tests/TestCSharp/Bindings.cs --library-name TestCpp --binding-namespace TestCpp --binding-classname TestBindings $(SolutionDir)../Tests/TestCpp/TestCpp.vcxproj",
+      "environmentVariables": {
+        "PATH": "%PATH%;$(ProjectDir)..\\Library"
+      }
     },
     "CrossEngine": {
       "commandName": "Project",

@@ -22,6 +22,7 @@
 	
 	<ItemGroup>
 	  <PackageReference Include="ClangSharp" Version="15.0.2" />
+	  <PackageReference Include="libclang.runtime.win-x64" Version="15.0.0" />
 	  <PackageReference Include="libClangSharp" Version="15.0.0" />
 	</ItemGroup>
 </Project>
