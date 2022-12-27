@@ -11,7 +11,7 @@
     </PropertyGroup>
 	
 	<ItemGroup Condition="'$(Configuration)'=='Develop'">
-		<ProjectReference Include="..\..\..\..\General\General.CSharp\General\General.csproj" />
+		<ProjectReference Include="..\..\..\..\..\Library\General.CSharp\General\General.csproj" />
 	</ItemGroup>
 	
 	<ItemGroup Condition="'$(Configuration)'=='Debug' OR '$(Configuration)'=='Release'">

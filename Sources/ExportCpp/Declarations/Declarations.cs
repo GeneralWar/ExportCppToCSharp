@@ -7,7 +7,7 @@ using Type = System.Type;
 
 namespace ExportCpp
 {
-    internal class DeclarationType
+    public class DeclarationType
     {
         public CXType CXType { get; }
         /// <summary>
@@ -33,7 +33,7 @@ namespace ExportCpp
         }
     }
 
-    interface ITypeDeclaration
+    public interface ITypeDeclaration
     {
         string Name { get; }
         string FullName { get; }
@@ -43,7 +43,7 @@ namespace ExportCpp
         bool MatchTypeName(string name);
     }
 
-    internal abstract class Declaration
+    public abstract class Declaration
     {
         protected const string KEY_DECORATIONS = "Decorations";
 
@@ -68,7 +68,7 @@ namespace ExportCpp
 
         public DeclarationCollection? Parent { get; private set; }
 
-        public Declaration(CppContext context, CXCursor cursor)
+        internal Declaration(CppContext context, CXCursor cursor)
         {
             this.Cursor = cursor;
             this.Filename = context.Filename;
@@ -347,17 +347,23 @@ namespace ExportCpp
                 case CXCursorKind.CXCursor_EnumDecl: return new Enum(context, cursor);
                 case CXCursorKind.CXCursor_EnumConstantDecl: return new EnumConstant(context, cursor);
                 case CXCursorKind.CXCursor_FieldDecl: return new Field(context, cursor);
+                case CXCursorKind.CXCursor_UsingDeclaration:
+                    if (CXCursorKind.CXCursor_OverloadedDeclRef == cursor.Definition.kind)
+                    {
+                        return new Function(context, cursor);
+                    }
+                    break;
             }
             return null;
         }
     }
 
-    internal abstract class DeclarationCollection : Declaration
+    public abstract class DeclarationCollection : Declaration
     {
         public List<Declaration> Declarations { get; init; } = new List<Declaration>();
         public List<Declaration> TypeDefines { get; init; } = new List<Declaration>();
 
-        public DeclarationCollection(CppContext context, CXCursor cursor) : base(context, cursor) { }
+        internal DeclarationCollection(CppContext context, CXCursor cursor) : base(context, cursor) { }
 
         public DeclarationCollection(string name) : base(name) { }
 
@@ -385,6 +391,30 @@ namespace ExportCpp
             {
                 declaration.setShouldExport(true);
             }
+        }
+
+        private void removeDeclaration(Declaration declaration)
+        {
+            if (CXCursorKind.CXCursor_TypedefDecl == declaration.Cursor.kind)
+            {
+                this.TypeDefines.Remove(declaration);
+            }
+
+            this.Declarations.Remove(declaration);
+            declaration.setParent(null);
+        }
+
+        /// <summary>
+        /// Set declaration, will replace existed declarations which have the same name
+        /// </summary>
+        /// <param name="declaration"></param>
+        public void SetDeclaration(Declaration declaration)
+        {
+            foreach (Declaration record in this.Declarations.Where(d => d.Name == declaration.Name).ToArray())
+            {
+                this.removeDeclaration(record);
+            }
+            this.AddDeclaration(declaration);
         }
 
         public Declaration? GetDeclaration(string name)
@@ -415,11 +445,11 @@ namespace ExportCpp
         }
     }
 
-    internal class Namespace : DeclarationCollection
+    public class Namespace : DeclarationCollection
     {
         public override string? ExportMacro => null;
 
-        public Namespace(CppContext context, CXCursor cursor) : base(context, cursor) { }
+        internal Namespace(CppContext context, CXCursor cursor) : base(context, cursor) { }
 
         internal Namespace(string name) : base(name) { }
 
@@ -511,6 +541,8 @@ namespace ExportCpp
 
         public override string? ExportMacro => CppAnalyzer.ExportFunctionMacro;
 
+        public CXCursor MethodCursor { get; init; }
+
         public Type ReturnType { get; protected set; }
 
         public string? BindingName => this.ExportContents.Length > INDEX_EXPORT_NAME ? this.ExportContents[INDEX_EXPORT_NAME] : null;
@@ -520,6 +552,7 @@ namespace ExportCpp
 
         public Function(CppContext context, CXCursor cursor) : base(context, cursor)
         {
+            this.MethodCursor = this.checkMethodCursor();
             this.ReturnType = this.checkReturnType(context);
 
             List<Argument> arguments = new List<Argument>();
@@ -530,7 +563,28 @@ namespace ExportCpp
             this.Arguments = arguments.ToArray();
         }
 
-        protected virtual Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.ReturnType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.ReturnType.GetOriginalTypeName()}");
+        private CXCursor checkMethodCursor()
+        {
+            if (CXCursorKind.CXCursor_CXXMethod == this.Cursor.kind || CXCursorKind.CXCursor_TypedefDecl == this.Cursor.kind)
+            {
+                return this.Cursor;
+            }
+
+            if (CXCursorKind.CXCursor_OverloadedDeclRef == this.Cursor.Definition.kind)
+            {
+                Tracer.Assert(1 == this.Cursor.Definition.NumOverloadedDecls);
+                return this.Cursor.Definition.GetOverloadedDecl(0);
+            }
+
+            throw new NotImplementedException();
+        }
+
+        protected virtual Type checkReturnType(CppContext context)
+        {
+            CXType returnType = this.MethodCursor.ReturnType;
+            return this.FindType(context, returnType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.ReturnType.GetOriginalTypeName()}");
+        }
+
         protected override string checkFullName() => $"{this.Cursor.SemanticParent.GetFullTypeName()}::{this.Name}";
 
         protected override void makeXml(XmlElement element)
@@ -590,13 +644,19 @@ namespace ExportCpp
                 }
             }
 
+            string execution = $"{instanceName}->{this.Name}({string.Join(", ", this.Arguments.Select(a => a.Name))})";
             if (typeof(void) == this.ReturnType)
             {
-                contents.Add($"{instanceName}->{this.Name}({string.Join(", ", this.Arguments.Select(a => a.Name))});");
+                contents.Add(execution + ";");
             }
             else
             {
-                contents.Add($"return {instanceName}->{this.Name}({string.Join(", ", this.Arguments.Select(a => a.Name))});");
+                CppType? cppType = this.ReturnType as CppType;
+                if (cppType is not null)
+                {
+                    execution = cppType.ConvertToCppResult(execution);
+                }
+                contents.Add($"return {execution};");
             }
             return contents;
         }
@@ -641,7 +701,7 @@ namespace ExportCpp
     {
         public override string? ExportMacro => CppAnalyzer.ExportFunctionPointerMacro;
 
-        public DeclarationType Type { get; init; } = new DeclarationType(new CXType(), null, null, null);
+        public DeclarationType Type { get; init; }
 
         public string FunctionTypeString => this.Type.CXType.PointeeType.Spelling.CString;
 
@@ -716,20 +776,20 @@ namespace ExportCpp
         }
     }
 
-    internal class Class : DeclarationCollection, ITypeDeclaration
+    public class Class : DeclarationCollection, ITypeDeclaration
     {
         public override string? ExportMacro => CppAnalyzer.ExportClassMacro;
         private const int INDEX_EXPORT_AS = 0;
         private const int INDEX_EXPORT_PREFIX = 1;
 
-        public DeclarationType Type { get; init; } = new DeclarationType(new CXType(), null, null, null);
+        public DeclarationType Type { get; init; }
         public Type? ExportAsType { get; private set; }
 
         public string? BindingPrefix => this.ExportContents.Length > INDEX_EXPORT_PREFIX ? this.ExportContents[INDEX_EXPORT_PREFIX] : "";
 
-        public Class(CppContext context, CXCursor cursor) : base(context, cursor)
+        internal Class(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            this.Type = new DeclarationType(cursor.Type, new CppType(this), typeof(IntPtr).ToCSharpTypeString(), typeof(IntPtr).ToCSharpUnmanagedTypeString());
+            this.Type = new DeclarationType(cursor.Type, this.checkDeclaredType(), typeof(IntPtr).ToCSharpTypeString(), typeof(IntPtr).ToCSharpUnmanagedTypeString());
 
             if (this.ExportContents.Length > INDEX_EXPORT_AS)
             {
@@ -738,11 +798,13 @@ namespace ExportCpp
             }
         }
 
-        internal Class(string name, Type csharpType, Type exportAsType) : base(name)
+        protected Class(string name, Type csharpType, Type exportAsType) : base(name)
         {
-            this.Type = new DeclarationType(new CXType(), new CppType(this), csharpType.ToCSharpTypeString(), csharpType.ToCSharpUnmanagedTypeString());
+            this.Type = new DeclarationType(new CXType(), this.checkDeclaredType(), csharpType.ToCSharpTypeString(), csharpType.ToCSharpUnmanagedTypeString());
             this.ExportAsType = exportAsType;
         }
+
+        protected virtual Type checkDeclaredType() => new CppType(this);
 
         protected override void internalMerge(Declaration other)
         {
@@ -813,13 +875,15 @@ namespace ExportCpp
 
         public override string? ExportMacro => CppAnalyzer.ExportEnumMacro;
 
+        public string BindingName { get; init; }
+
         public string[] Values { get; private set; } = new string[0];
 
         public DeclarationType Type { get; init; }
 
         public Enum(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            string csharpTypeString = this.ExportContents.Length > INDEX_NAME ? this.ExportContents[INDEX_NAME] : "";
+            string csharpTypeString = this.BindingName = this.ExportContents.Length > INDEX_NAME ? this.ExportContents[INDEX_NAME] : "";
             this.Type = new DeclarationType(cursor.Type, new CppType(this), csharpTypeString, csharpTypeString);
         }
 
@@ -863,7 +927,7 @@ namespace ExportCpp
 
         public override string ToCSharpCode()
         {
-            return $"{this.Name} = {this.Value}";
+            return $"{this.Name} = {this.Value},";
         }
     }
 }

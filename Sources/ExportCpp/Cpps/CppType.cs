@@ -1,10 +1,11 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using ClangSharp.Interop;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
 
-namespace ExportCpp.Cpps
+namespace ExportCpp
 {
-    internal class CppType : Type
+    public class CppType : Type
     {
         public ITypeDeclaration Declaration { get; init; }
 
@@ -46,6 +47,18 @@ namespace ExportCpp.Cpps
         {
             return this.Declaration.Type.CSharpTypeString;
         }
+
+        public virtual string ToCppTypeString()
+        {
+            return this.IsPointer ? (this.FullName + "*") : (this.FullName ?? throw new InvalidOperationException());
+        }
+
+        /// <summary>
+        /// convert to cpp function result after 'return'
+        /// </summary>
+        /// <param name="content">original content of execution, such as 'instance->function()' after 'return'</param>
+        /// <returns></returns>
+        public virtual string ConvertToCppResult(string content) => content;
 
         public override ConstructorInfo[] GetConstructors(BindingFlags bindingAttr)
         {

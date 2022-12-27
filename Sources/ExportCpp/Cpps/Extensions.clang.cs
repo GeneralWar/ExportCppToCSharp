@@ -2,7 +2,7 @@
 
 namespace ExportCpp
 {
-    static internal partial class Extensions
+    static public partial class Extensions
     {
         static public string GetName(this CXCursor instance)
         {

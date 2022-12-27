@@ -1,13 +1,12 @@
 ﻿using ClangSharp.Interop;
 using General;
 using General.Tracers;
-using System.Diagnostics;
 using System.Text.RegularExpressions;
 using System.Xml;
 
 namespace ExportCpp
 {
-    internal partial class CppAnalyzer
+    public partial class CppAnalyzer
     {
         static internal string ExportClassMacro { get; private set; } = "EXPORT_CLASS";
         static internal string ExportConstructorMacro { get; private set; } = "EXPORT_CONSTRUCTOR";
@@ -52,13 +51,13 @@ namespace ExportCpp
 
         public CppAnalyzer(string solutionFilename, string projectFilename, string exportFilename, string bindingFilename, string libraryName, string bindingClassname)
         {
-            this.SolutionFilename = solutionFilename;
-            this.SolutionDirectory = Path.GetDirectoryName(solutionFilename) ?? "";
+            this.SolutionFilename = Path.GetFullPath(solutionFilename).MakeStandardPath();
+            this.SolutionDirectory = Path.GetDirectoryName(this.SolutionFilename)?.MakeStandardPath() ?? "";
 
-            this.ProjectFilename = projectFilename;
-            this.ExportFilename = exportFilename;
-            this.BindingFilename = bindingFilename;
-            this.ProjectDirectory = Path.GetDirectoryName(projectFilename) ?? "";
+            this.ProjectFilename = Path.GetFullPath(projectFilename).MakeStandardPath();
+            this.ExportFilename = Path.GetFullPath(exportFilename).MakeStandardPath();
+            this.BindingFilename = Path.GetFullPath(bindingFilename).MakeStandardPath();
+            this.ProjectDirectory = Path.GetDirectoryName(this.ProjectFilename)?.MakeStandardPath() ?? "";
             this.IncludeDirectories.Add(PathUtility.MakeDirectoryStandard(this.ProjectDirectory));
 
             this.LibraryName = libraryName;
@@ -67,9 +66,28 @@ namespace ExportCpp
             mGlobal = this.initializeGlobal();
         }
 
-        public void SetNamespace(string? bindingNamespace)
+        public void SetBindingNamespace(string? bindingNamespace)
         {
             this.BindingNamespace = bindingNamespace;
+        }
+
+        /// <summary>
+        /// Set custom declaration, will throw exception if fullname is invalid
+        /// </summary>
+        /// <exception cref="InvalidOperationException">If fullname is invalid, such as invalid ancestor</exception>
+        public void SetCustomDeclaration(string fullname, Declaration declaration)
+        {
+            DeclarationCollection? parent = mGlobal;
+            string[] parts = fullname.Split(new[] { "::", "." }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string part in parts.Take(parts.Length - 1))
+            {
+                parent = parent?.GetDeclaration(part)as DeclarationCollection;
+            }
+            if (parent is null)
+            {
+                throw new InvalidOperationException($"Invalid path {fullname}");
+            }
+            parent.SetDeclaration(declaration);
         }
 
         private void printVersion()
@@ -120,7 +138,7 @@ namespace ExportCpp
 
         private string checkFullPathForProjectFile(string filename)
         {
-            return Path.IsPathRooted(filename) ? Path.GetFullPath(filename) : Path.GetFullPath(filename, this.ProjectDirectory);
+            return (Path.IsPathRooted(filename) ? Path.GetFullPath(filename) : Path.GetFullPath(filename, this.ProjectDirectory)).MakeStandardPath();
         }
 
         private bool execute(IEnumerable<string> arguments, string filename, out CXTranslationUnit translationUnit)
@@ -145,7 +163,7 @@ namespace ExportCpp
             //            argumentList.Add("-v");
             //#endif
 
-            Tracer.Log($"Try to execute clang with arguments : {string.Join(" ", argumentList)}");
+            Tracer.Log($"Try to execute clang with arguments : {string.Join(" ", argumentList)} {filename}");
             //ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
             ConsoleLogger.Log($"Try to analyze {filename}");
             CXErrorCode errorCode = CXTranslationUnit.TryParse(CXIndex.Create(), filename, new ReadOnlySpan<string>(argumentList.ToArray()), new ReadOnlySpan<CXUnsavedFile>(unsavedFiles.ToArray()), CXTranslationUnit_Flags.CXTranslationUnit_None, out translationUnit);
@@ -166,11 +184,21 @@ namespace ExportCpp
                     diagnostic.Location.GetFileLocation(out file, out line, out column, out offset);
                     switch (diagnostic.Severity)
                     {
+                        case CXDiagnosticSeverity.CXDiagnostic_Ignored:
+                            Tracer.Log($"{file}:{line}:{column} ignored: {diagnostic.Spelling.CString}");
+                            break;
+                        case CXDiagnosticSeverity.CXDiagnostic_Note:
+                            Tracer.Log($"{file}:{line}:{column} note: {diagnostic.Spelling.CString}");
+                            break;
                         case CXDiagnosticSeverity.CXDiagnostic_Warning:
                             Tracer.Warn($"{file}:{line}:{column} warning: {diagnostic.Spelling.CString}");
                             break;
                         case CXDiagnosticSeverity.CXDiagnostic_Error:
                             Tracer.Error($"{file}:{line}:{column} error: {diagnostic.Spelling.CString}");
+                            failed = true;
+                            break;
+                        case CXDiagnosticSeverity.CXDiagnostic_Fatal:
+                            Tracer.Error($"{file}:{line}:{column} fatal: {diagnostic.Spelling.CString}");
                             failed = true;
                             break;
                     }
@@ -277,6 +305,8 @@ namespace ExportCpp
             this.printVersion();
 
             ConsoleLogger.Log($"Try to analyze project {this.ProjectFilename}");
+            ConsoleLogger.Log($"Export to {this.ExportFilename}");
+            ConsoleLogger.Log($"Bind to {this.BindingFilename}");
 
             XmlDocument document = new XmlDocument();
             document.Load(this.ProjectFilename);
@@ -379,7 +409,7 @@ namespace ExportCpp
                 uint line, column, offset;
                 location.GetFileLocation(out file, out line, out column, out offset);
                 string realPath = file.TryGetRealPathName().CString;
-                if (string.IsNullOrWhiteSpace(realPath) || Path.GetFullPath(realPath) != Path.GetFullPath(filename))
+                if (string.IsNullOrWhiteSpace(realPath) || Path.GetFullPath(realPath).MakeStandardPath() != Path.GetFullPath(filename).MakeStandardPath())
                 {
                     continue;
                 }
@@ -396,7 +426,7 @@ namespace ExportCpp
                 return;
             }
 
-            if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind) 
+            if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind)
             {
                 return;
             }
@@ -628,7 +658,7 @@ namespace ExportCpp
                     }
 
                     writer.WriteLine(context.TabCount, $"static internal class {this.BindingClassname}");
-                    writer.Write(context.TabCount, "{");
+                    writer.WriteLine(context.TabCount, "{");
 
                     this.bind(context, mGlobal);
 
@@ -668,14 +698,18 @@ namespace ExportCpp
             Struct? @struct = declaration as Struct;
             if (@struct is not null)
             {
+                ++context.TabCount;
                 this.bindStruct(context, @struct);
+                --context.TabCount;
                 return;
             }
 
             Enum? @enum = declaration as Enum;
             if (@enum is not null)
             {
+                ++context.TabCount;
                 this.bindEnum(context, @enum);
+                --context.TabCount;
                 return;
             }
         }
@@ -719,7 +753,24 @@ namespace ExportCpp
 
         private void bindEnum(CSharpBindingContext context, Enum declaration)
         {
+            if (string.IsNullOrWhiteSpace(declaration.BindingName))
+            {
+                return;
+            }
 
+            context.Writer.WriteLine(context.TabCount, $"internal enum {declaration.BindingName}");
+            context.Writer.WriteLine(context.TabCount, "{");
+            foreach (Declaration child in declaration.Declarations)
+            {
+                EnumConstant? constant = child as EnumConstant;
+                if (constant is not null)
+                {
+                    context.Writer.WriteLine(context.TabCount + 1, constant.ToCSharpCode());
+                }
+            }
+            context.Writer.WriteLine(context.TabCount, "}");
+
+            ConsoleLogger.Log($"Bind {declaration}");
         }
 
         public void ExportXml()

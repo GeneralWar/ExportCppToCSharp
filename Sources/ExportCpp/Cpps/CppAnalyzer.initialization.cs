@@ -7,7 +7,7 @@ using System.Xml;
 
 namespace ExportCpp
 {
-    internal partial class CppAnalyzer
+    public partial class CppAnalyzer
     {
         private Namespace initializeGlobal()
         {
@@ -23,7 +23,7 @@ namespace ExportCpp
         {
             Namespace std = new Namespace("std");
 
-            std.AddDeclaration(new Class("string", typeof(string), typeof(string)));
+            std.AddDeclaration(new Cpps.Builtins.Stds.String());
 
             return std;
         }

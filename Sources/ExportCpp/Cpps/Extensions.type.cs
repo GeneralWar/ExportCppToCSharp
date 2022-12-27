@@ -2,7 +2,7 @@
 
 namespace ExportCpp
 {
-    static internal partial class Extensions
+    static public partial class Extensions
     {
         static public string ToCSharpTypeString(this Type type)
         {
@@ -36,7 +36,7 @@ namespace ExportCpp
             CppType? cppType = type as CppType;
             if (cppType is not null)
             {
-                return cppType.IsPointer ? (cppType.FullName + "*") : (cppType.FullName ?? throw new InvalidOperationException());
+                return cppType.ToCppTypeString();
             }
 
             return type.ToCppString() ?? throw new InvalidOperationException();
