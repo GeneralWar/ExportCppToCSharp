@@ -2,6 +2,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
+using System.Xml.Linq;
 
 namespace ExportCpp
 {
@@ -13,9 +14,38 @@ namespace ExportCpp
 
         public override string? AssemblyQualifiedName => throw new NotImplementedException();
 
-        public override Type? BaseType => throw new NotImplementedException();
+        public override Type? BaseType
+        {
+            get
+            {
+                if (this.IsPointer)
+                {
+                    return null;
+                }
 
-        public override string? FullName => this.Declaration.FullName;
+                Class? @class = this.Declaration as Class;
+                if (@class is not null)
+                {
+                    return @class.ExportAsType == this ? typeof(object) : @class.ExportAsType;
+                }
+
+                Struct? @struct = this.Declaration as Struct;
+                if (@struct is not null)
+                {
+                    return typeof(ValueType);
+                }
+
+                Enum? @enum = this.Declaration as Enum;
+                if (@enum is not null)
+                {
+                    return typeof(System.Enum);
+                }
+
+                return null;
+            }
+        }
+
+        public override string? FullName => this.IsPointer ? $"{this.Declaration.FullName}*" : this.Declaration.FullName;
 
         public override Guid GUID => throw new NotImplementedException();
 
@@ -25,17 +55,17 @@ namespace ExportCpp
 
         public override Type UnderlyingSystemType => this;
 
-        public override string Name => this.Declaration.Name;
+        public override string Name => this.IsPointer ? $"{this.Declaration.Name}*" : this.Declaration.Name;
 
         private bool mIsPointer = false;
         protected override bool IsPointerImpl() => mIsPointer;
 
         public CppType(ITypeDeclaration declaration) : this(declaration, false) { }
 
-        private CppType(ITypeDeclaration declaration, bool isPointer)
+        protected CppType(ITypeDeclaration declaration, bool isPointer)
         {
-            this.Declaration = declaration;
             mIsPointer = isPointer;
+            this.Declaration = declaration;
         }
 
         public override Type MakePointerType()
@@ -45,20 +75,63 @@ namespace ExportCpp
 
         public string ToCSharpTypeString()
         {
-            return this.Declaration.Type.CSharpTypeString;
+            return this.Declaration.CSharpTypeString;
         }
 
         public virtual string ToCppTypeString()
         {
-            return this.IsPointer ? (this.FullName + "*") : (this.FullName ?? throw new InvalidOperationException());
+            return this.FullName ?? throw new InvalidOperationException();
         }
 
-        /// <summary>
-        /// convert to cpp function result after 'return'
-        /// </summary>
-        /// <param name="content">original content of execution, such as 'instance->function()' after 'return'</param>
-        /// <returns></returns>
-        public virtual string ConvertToCppResult(string content) => content;
+        public virtual string MakeCppExportArgumentTypeString()
+        {
+            string value = this.Declaration.ToCppExportArgumentTypeString();
+            if (this.Declaration is Class)
+            {
+                return value;
+            }
+            return this.IsPointer ? (value + "*") : value;
+        }
+
+        public virtual bool CheckCppShouldCastExportArgumentTypeToInvocationType()
+        {
+            return this.Declaration.CheckCppShouldCastExportArgumentTypeToInvocationType();
+        }
+
+        public virtual string? MakeCppExportArgumentCastString(string argumentName, string targetName)
+        {
+            return this.Declaration.ToCppExportArgumentCastString(argumentName, targetName);
+        }
+
+        public virtual string? MakeCppExportInvocationCastString(string content)
+        {
+            return this.Declaration.ToCppExportInvocationCastString(content);
+        }
+
+        public virtual string MakeCppExportReturnTypeString()
+        {
+            string value = this.Declaration.ToCppExportReturnTypeString();
+            if (this.Declaration is Class)
+            {
+                return value;
+            }
+            return this.IsPointer ? (value + "*") : value;
+        }
+
+        public virtual string MakeCppExportReturnValueString(string content)
+        {
+            return this.Declaration.ToCppExportReturnValueString(content);
+        }
+
+        public virtual string MakeCppExportTypeString()
+        {
+            FunctionPointer? functionPointer = this.Declaration as FunctionPointer;
+            if (functionPointer is not null)
+            {
+                return functionPointer.FullName;
+            }
+            return this.Declaration.ToCppExportTypeString();
+        }
 
         public override ConstructorInfo[] GetConstructors(BindingFlags bindingAttr)
         {
@@ -77,7 +150,11 @@ namespace ExportCpp
 
         public override Type? GetElementType()
         {
-            throw new NotImplementedException();
+            if (!this.IsPointer)
+            {
+                throw new InvalidOperationException();
+            }
+            return new CppType(this.Declaration);
         }
 
         public override EventInfo? GetEvent(string name, BindingFlags bindingAttr)
@@ -189,6 +266,99 @@ namespace ExportCpp
         protected override bool IsPrimitiveImpl()
         {
             throw new NotImplementedException();
+        }
+
+        public override string ToString()
+        {
+            return $"{this.ToCppTypeString()} -> {this.ToCSharpTypeString()}";
+        }
+    }
+
+    public class CppTemplateType : CppType
+    {
+        private ITemplateTypeDeclaration mTemplateDeclaration;
+
+        private CXType mTemplateType;
+
+        private List<Type> mTemplateArguments;
+        public override Type[] GenericTypeArguments => mTemplateArguments.ToArray();
+
+        public override bool IsGenericType => true;
+
+        public CppTemplateType(ITemplateTypeDeclaration declaration, CXType templateType, IEnumerable<Type> templateArguments) : this(declaration, templateType, templateArguments, false) { }
+
+        private CppTemplateType(ITemplateTypeDeclaration declaration, CXType templateType, IEnumerable<Type> templateArguments, bool isPointer) : base(declaration, isPointer)
+        {
+            mTemplateDeclaration = declaration;
+
+            mTemplateType = templateType;
+            mTemplateArguments = new List<Type>(templateArguments);
+        }
+
+        public override Type MakePointerType()
+        {
+            return this.IsPointer ? this : new CppTemplateType(mTemplateDeclaration, mTemplateType, mTemplateArguments, true);
+        }
+
+        public string[] CheckTemplateExportArgumentTypes()
+        {
+            return mTemplateArguments.Select(t => t.MakeCppExportTypeString()).ToArray();
+        }
+
+        public string[] CheckTemplateInvocationArgumentTypes()
+        {
+            return mTemplateArguments.Select(t => t.ToCppTypeString()).ToArray();
+        }
+
+        public override string MakeCppExportArgumentTypeString()
+        {
+            return mTemplateDeclaration.ToCppExportArgumentTypeString(mTemplateArguments.ToArray());
+        }
+
+        public override bool CheckCppShouldCastExportArgumentTypeToInvocationType()
+        {
+            return mTemplateDeclaration.CheckCppShouldCastExportArgumentTypeToInvocationType(mTemplateArguments.ToArray());
+        }
+
+        public override string? MakeCppExportArgumentCastString(string argumentName, string targetName)
+        {
+            return mTemplateDeclaration.ToCppExportArgumentCastString(mTemplateArguments.ToArray(), argumentName, targetName);
+        }
+
+        public override string? MakeCppExportInvocationCastString(string content)
+        {
+            return mTemplateDeclaration.ToCppExportInvocationCastString(mTemplateArguments.ToArray(), content);
+        }
+
+        public override string MakeCppExportReturnTypeString()
+        {
+            return mTemplateDeclaration.ToCppExportReturnTypeString(mTemplateArguments.ToArray());
+        }
+
+        public override string MakeCppExportReturnValueString(string content)
+        {
+            return mTemplateDeclaration.ToCppExportReturnValueString(mTemplateArguments.ToArray(), content);
+        }
+
+        public override string MakeCppExportTypeString()
+        {
+            return (this.Declaration as ClassTemplate ?? throw new InvalidOperationException()).ToCppExportTypeString(mTemplateArguments);
+        }
+
+        public override string ToCppTypeString()
+        {
+            //string template = mTemplateType.GetFullTypeName();            
+            //return $"{template}<{string.Join(", ", mTemplateArguments.Select(a => a.Type.DeclaredType.ToCppTypeString()))}>";
+            return mTemplateType.GetFullTypeName();
+        }
+
+        public override Type? GetElementType()
+        {
+            if (!this.IsPointer)
+            {
+                throw new InvalidOperationException();
+            }
+            return new CppTemplateType(mTemplateDeclaration, mTemplateType, mTemplateArguments);
         }
     }
 }

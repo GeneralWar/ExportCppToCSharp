@@ -1,6 +1,8 @@
 ﻿using ClangSharp.Interop;
-using ExportCpp.Cpps;
 using General;
+using System;
+using System.Diagnostics;
+using System.Security.Claims;
 using System.Text.RegularExpressions;
 using System.Xml;
 using Type = System.Type;
@@ -14,22 +16,16 @@ namespace ExportCpp
         /// declared cpp type
         /// </summary>
         public Type DeclaredType { get; }
-        public string CSharpTypeString { get; }
-        public string CSharpUnmanagedTypeString { get; }
 
-        public bool IsUnsafe => this.CSharpTypeString.Contains('*') || this.CSharpTypeString.Contains("unmanaged") || (this.DeclaredType as CppType)?.Declaration is FunctionPointer;
-
-        public DeclarationType(CXType type, Type declaredType, string csharpTypeString, string csharpUnmanagedTypeString)
+        public DeclarationType(CXType type, Type declaredType)
         {
             this.CXType = type;
             this.DeclaredType = declaredType;
-            this.CSharpTypeString = csharpTypeString;
-            this.CSharpUnmanagedTypeString = csharpUnmanagedTypeString;
         }
 
         public override string ToString()
         {
-            return $"{this.DeclaredType.FullName} -> {this.CSharpTypeString}";
+            return $"{this.DeclaredType.FullName} -> {this.DeclaredType.ToCSharpTypeString()}";
         }
     }
 
@@ -39,17 +35,38 @@ namespace ExportCpp
         string FullName { get; }
 
         DeclarationType Type { get; }
+        public string CSharpTypeString { get; }
+        public string CSharpUnmanagedTypeString { get; }
 
         bool MatchTypeName(string name);
+
+        string ToCppExportArgumentTypeString();
+        bool CheckCppShouldCastExportArgumentTypeToInvocationType();
+        string? ToCppExportArgumentCastString(string argumentName, string targetName);
+        string? ToCppExportInvocationCastString(string content);
+        string ToCppExportReturnTypeString();
+        string ToCppExportReturnValueString(string content);
+        string ToCppExportTypeString();
+    }
+
+    public interface ITemplateTypeDeclaration : ITypeDeclaration
+    {
+        string ToCppExportArgumentTypeString(Type[] arguments);
+        bool CheckCppShouldCastExportArgumentTypeToInvocationType(Type[] arguments);
+        string? ToCppExportArgumentCastString(Type[] arguments, string argumentName, string targetName);
+        string? ToCppExportInvocationCastString(Type[] arguments, string content);
+        string ToCppExportReturnTypeString(Type[] arguments);
+        string ToCppExportReturnValueString(Type[] arguments, string content);
+        string ToCppExportTypeString(Type[] arguments);
     }
 
     public abstract class Declaration
     {
         protected const string KEY_DECORATIONS = "Decorations";
+        public CppAnalyzer Analyzer { get; protected set; }
+        public Global Global => this.Analyzer.Global;
 
         public CXCursor Cursor { get; protected set; }
-
-        public Namespace? Root { get; protected set; }
         public string Filename { get; init; }
 
         public string Name { get; init; }
@@ -66,11 +83,16 @@ namespace ExportCpp
         public string? ExportContent { get; private set; }
         public string[] ExportContents { get; private set; } = new string[0];
 
+        public virtual bool IsUnsafe => false;
+
+        private bool mIsAnalyzed = false;
+
         public DeclarationCollection? Parent { get; private set; }
 
         internal Declaration(CppContext context, CXCursor cursor)
         {
             this.Cursor = cursor;
+            this.Analyzer = context.Analyzer;
             this.Filename = context.Filename;
 
             this.Name = cursor.Spelling.CString;
@@ -89,8 +111,10 @@ namespace ExportCpp
             this.checkExport(context);
         }
 
-        internal Declaration(string name)
+        internal Declaration(CppAnalyzer analyzer, string name)
         {
+            this.Analyzer = analyzer;
+
             this.FullName = this.DisplayString = this.Name = name;
             this.Filename = this.Content = "";
         }
@@ -155,9 +179,7 @@ namespace ExportCpp
             this.Parent = parent;
             if (parent is not null)
             {
-                this.Root = parent.Root;
-
-                if (this.Cursor.IsInvalid)
+                if (!this.Cursor.IsInvalid)
                 {
                     this.updateFullNameAndDisplayString();
                 }
@@ -166,7 +188,7 @@ namespace ExportCpp
 
         protected internal void updateFullNameAndDisplayString()
         {
-            this.FullName = this.DisplayString = this.Parent is null ? this.Name : $"{this.Parent.FullName}::{this.Name}";
+            this.FullName = this.DisplayString = (this.Parent is null || this.Parent == this.Global) ? this.Name : $"{this.Parent.FullName}::{this.Name}";
         }
 
         public void Merge(Declaration other)
@@ -184,12 +206,36 @@ namespace ExportCpp
             this.ShouldExport = other.ShouldExport;
             this.ExportContent = other.ExportContent;
             this.ExportContents = other.ExportContents;
-            this.Parent = other.Parent;
 
             this.internalMerge(other);
         }
 
         protected virtual void internalMerge(Declaration other) { }
+
+        internal void Analyze(CppContext context)
+        {
+            if (mIsAnalyzed)
+            {
+                return;
+            }
+
+            try
+            {
+                this.internalAnalyze(context);
+                mIsAnalyzed = true;
+            }
+            catch (Exception e)
+            {
+                context.AppendFailedDeclaration(this, e);
+            }
+        }
+
+        internal void ForceAnalyze(CppContext context)
+        {
+            this.internalAnalyze(context);
+        }
+
+        internal virtual void internalAnalyze(CppContext context) { }
 
         public virtual string ToCppCode()
         {
@@ -210,8 +256,6 @@ namespace ExportCpp
         }
 
         protected abstract void makeXml(XmlElement element);
-
-        protected virtual Type? getDeclaredType() => null;
 
         private CXCursor findCursorUpward(CXCursor startCursor, CXCursorKind kind, string name)
         {
@@ -234,48 +278,30 @@ namespace ExportCpp
             return cursor.DisplayName.CString == name && kind == cursor.kind ? cursor : CXCursor.Null;
         }
 
-        static internal Declaration? FindDeclarationUpwards(Declaration? start, string name)
+        static internal Declaration? FindDeclarationUpwards(CppContext context, CXCursor cursor, string name)
         {
-            for (Declaration? declaration = start; declaration is not null; declaration = declaration.Parent)
+            if (cursor.GetName() == name)
             {
-                if ((declaration as ITypeDeclaration)?.MatchTypeName(name) ?? false)
+                return context.Global.GetDeclaration(cursor.GetFullTypeName());
+            }
+
+            // TODO: should check using namespace expressions
+
+            for (CXCursor current = cursor.SemanticParent; !current.IsInvalid; current = current.SemanticParent)
+            {
+                DeclarationCollection? collection = current.IsTranslationUnit ? context.Global : context.Global.GetDeclaration(current.GetFullName()) as DeclarationCollection;
+                if (collection is null)
+                {
+                    continue;
+                }
+
+                Declaration? declaration = collection.GetDeclaration(name);
+                if (declaration is not null)
                 {
                     return declaration;
                 }
-
-                DeclarationCollection? collection = declaration as DeclarationCollection;
-                if (collection is not null)
-                {
-                    foreach (Declaration child in collection.Declarations)
-                    {
-                        if ((child as ITypeDeclaration)?.MatchTypeName(name) ?? false)
-                        {
-                            return child;
-                        }
-                    }
-                }
             }
             return null;
-        }
-
-        private Declaration? findTypeUpward(CppContext context, string name)
-        {
-            if (this.Name == name && (this is Class || this is Struct || this is Enum))
-            {
-                return this;
-            }
-
-            Declaration? declaration = FindDeclarationUpwards(this.Parent, name);
-            declaration ??= FindDeclarationUpwards(context.CurrentScope, name);
-            if (declaration is null)
-            {
-                CXCursor cursor = this.findCursorUpward(this.Cursor, CXCursorKind.CXCursor_ClassDecl, name);
-                if (cursor.MatchTypeName(name) && CXCursorKind.CXCursor_ClassDecl == cursor.kind)
-                {
-                    declaration = context.GetDeclaration(cursor.GetFullTypeName());
-                }
-            }
-            return declaration;
         }
 
         internal Type? FindType(CppContext context, CXType type)
@@ -283,6 +309,12 @@ namespace ExportCpp
             if (CXTypeKind.CXType_Invalid == type.kind)
             {
                 return null;
+            }
+
+            ITypeDeclaration? declaration = context.Global.GetDeclaration(type.GetFullTypeName()) as ITypeDeclaration;
+            if (declaration is not null)
+            {
+                return declaration.Type.DeclaredType;
             }
 
             if (CXTypeKind.CXType_Pointer == type.kind)
@@ -294,8 +326,20 @@ namespace ExportCpp
                 else */
                 if (CXTypeKind.CXType_FirstBuiltin <= type.PointeeType.kind && type.PointeeType.kind <= CXTypeKind.CXType_LastBuiltin)
                 {
-                    return type.PointeeType.ToBuiltinType().MakePointerType();
+                    return this.FindType(context, type.PointeeType)?.MakePointerType();
                 }
+
+                return this.FindType(context, type.PointeeType)?.MakePointerType();
+            }
+
+            if (CXTypeKind.CXType_Typedef == type.kind)
+            {
+                return this.FindType(context, type.Declaration.TypedefDeclUnderlyingType);
+            }
+
+            if (CXTypeKind.CXType_LValueReference == type.kind || CXTypeKind.CXType_RValueReference == type.kind)
+            {
+                return this.FindType(context, type.PointeeType);
             }
 
             if (CXTypeKind.CXType_FirstBuiltin <= type.kind && type.kind <= CXTypeKind.CXType_LastBuiltin)
@@ -303,23 +347,47 @@ namespace ExportCpp
                 return type.ToBuiltinType();
             }
 
+            if (type.NumTemplateArguments > 0)
+            {
+                string templateName = type.GetTemplateName();
+                Tracer.Assert(!string.IsNullOrWhiteSpace(templateName));
+
+                ClassTemplate template = Declaration.FindDeclarationUpwards(context, this.Cursor, templateName) as ClassTemplate ?? throw new InvalidOperationException($"There is no template class {templateName}");
+                return template.MakeGenericType(context, type);
+            }
+
             return this.FindType(context, type.GetOriginalTypeName());
         }
 
         internal Type? FindType(CppContext context, string name)
         {
+            if (this.Name == name && (this is ITypeDeclaration))
+            {
+                return (this as ITypeDeclaration)?.Type.DeclaredType;
+            }
+
             Type? type = name.TypeFromCppString();
             if (type is not null)
             {
                 return type;
             }
 
-            string safename = name.Trim();
-            Declaration? declaration = this.findTypeUpward(context, safename);
-            declaration ??= this.Root?.GetDeclaration(safename);
-            declaration ??= this.Root == context.Global ? null : context.Global.GetDeclaration(safename);
-            declaration ??= context.GetDeclaration(safename);
-            return (declaration as ITypeDeclaration)?.Type.DeclaredType;
+            Declaration? declaration = context.GetDeclaration(name);
+            type = (declaration as ITypeDeclaration)?.Type.DeclaredType;
+            if (type is null)
+            {
+                type = ((context.CurrentScope as DeclarationCollection)?.GetDeclaration(name) as ITypeDeclaration)?.Type.DeclaredType;
+            }
+            if (type is null)
+            {
+                declaration = Declaration.FindDeclarationUpwards(context, this.Cursor, name);
+                type = (declaration as ITypeDeclaration)?.Type.DeclaredType;
+                if (type is not null)
+                {
+                    return type;
+                }
+            }
+            return type;
         }
 
         public override string ToString()
@@ -333,6 +401,7 @@ namespace ExportCpp
             {
                 case CXCursorKind.CXCursor_Namespace: return new Namespace(context, cursor);
                 case CXCursorKind.CXCursor_ClassDecl: return new Class(context, cursor);
+                case CXCursorKind.CXCursor_ClassTemplate: return new ClassTemplate(context, cursor);
                 case CXCursorKind.CXCursor_Constructor: return new Constructor(context, cursor);
                 case CXCursorKind.CXCursor_FunctionDecl:
                 case CXCursorKind.CXCursor_CXXMethod:
@@ -353,6 +422,9 @@ namespace ExportCpp
                         return new Function(context, cursor);
                     }
                     break;
+                case CXCursorKind.CXCursor_UsingDirective:
+                case CXCursorKind.CXCursor_InclusionDirective:
+                    break;
             }
             return null;
         }
@@ -360,21 +432,37 @@ namespace ExportCpp
 
     public abstract class DeclarationCollection : Declaration
     {
-        public List<Declaration> Declarations { get; init; } = new List<Declaration>();
-        public List<Declaration> TypeDefines { get; init; } = new List<Declaration>();
+        private List<Declaration> mDeclarations = new List<Declaration>();
+        public IEnumerable<Declaration> Declarations => mDeclarations;
+
+        private List<Declaration> mTypeDefines = new List<Declaration>();
+        public IEnumerable<Declaration> TypeDefines => mTypeDefines;
+
+        private HashSet<string> mUsingNamespaces = new HashSet<string>();
+        public IEnumerable<string> UsingNamespaces => mUsingNamespaces;
 
         internal DeclarationCollection(CppContext context, CXCursor cursor) : base(context, cursor) { }
 
-        public DeclarationCollection(string name) : base(name) { }
+        public DeclarationCollection(CppAnalyzer analyzer, string name) : base(analyzer, name) { }
+
+        internal override void internalAnalyze(CppContext context)
+        {
+            base.internalAnalyze(context);
+
+            foreach (Declaration declaration in mDeclarations)
+            {
+                declaration.Analyze(context);
+            }
+        }
 
         public void AddDeclaration(Declaration declaration)
         {
             declaration.setParent(this);
-            this.Declarations.Add(declaration);
+            mDeclarations.Add(declaration);
 
             if (CXCursorKind.CXCursor_TypedefDecl == declaration.Cursor.kind)
             {
-                this.TypeDefines.Add(declaration);
+                mTypeDefines.Add(declaration);
             }
 
             if (!this.ShouldExport && declaration.ShouldExport)
@@ -391,17 +479,21 @@ namespace ExportCpp
             {
                 declaration.setShouldExport(true);
             }
+
+            this.Global.RegisterDeclaration(declaration);
         }
 
         private void removeDeclaration(Declaration declaration)
         {
             if (CXCursorKind.CXCursor_TypedefDecl == declaration.Cursor.kind)
             {
-                this.TypeDefines.Remove(declaration);
+                mTypeDefines.Remove(declaration);
             }
 
-            this.Declarations.Remove(declaration);
+            mDeclarations.Remove(declaration);
             declaration.setParent(null);
+
+            this.Global.UnregisterDeclaration(declaration);
         }
 
         /// <summary>
@@ -419,7 +511,52 @@ namespace ExportCpp
 
         public Declaration? GetDeclaration(string name)
         {
-            return this.Declarations.Find(d => d.Name == name);
+            string selfPrefix = this.Name + Namespace.SEPARATOR;
+            if (name.StartsWith(selfPrefix))
+            {
+                return this.GetDeclaration(name.Substring(selfPrefix.Length));
+            }
+
+            List<string> potentialNames = this.UsingNamespaces.Select(u => $"{u}::{name}").ToList();
+            potentialNames.Insert(0, name);
+
+            Declaration? declaration = null;
+            foreach (string potentialName in potentialNames)
+            {
+                if (potentialName.Contains("::"))
+                {
+                    string[] parts = CppAnalyzer.SplitFullName(potentialName);
+                    if (parts.Length > 1)
+                    {
+                        DeclarationCollection? item = mDeclarations.Find(d => d.Name == parts[0]) as DeclarationCollection;
+                        declaration = item?.GetDeclaration(string.Join(Namespace.SEPARATOR, parts.Skip(1)));
+                    }
+                }
+                declaration ??= mDeclarations.Find(d => d.Name == name || ((d as ITypeDeclaration)?.MatchTypeName(potentialName) ?? false));
+                if (declaration is not null)
+                {
+                    break;
+                }
+            }
+            return declaration;
+        }
+
+        public void AppendUsingNamespace(string @namespace)
+        {
+            mUsingNamespaces.Add(@namespace);
+        }
+
+        public void AppendUsingNamespace(CXCursor cursor)
+        {
+            if (CXCursorKind.CXCursor_UsingDirective != cursor.kind)
+            {
+                return;
+            }
+
+            Tracer.Assert(CXCursorKind.CXCursor_Namespace == cursor.Definition.kind);
+
+            string fullname = cursor.Definition.GetFullName();
+            this.AppendUsingNamespace(fullname);
         }
 
         protected internal override void setParent(DeclarationCollection? parent)
@@ -441,24 +578,21 @@ namespace ExportCpp
             {
                 this.AddDeclaration(child);
             }
-            source.Declarations.Clear();
+            //source.Declarations.Clear();
         }
     }
 
     public class Namespace : DeclarationCollection
     {
+        public const string SEPARATOR = "::";
+
         public override string? ExportMacro => null;
 
         internal Namespace(CppContext context, CXCursor cursor) : base(context, cursor) { }
 
-        internal Namespace(string name) : base(name) { }
+        public Namespace(CppAnalyzer analyzer, string name) : base(analyzer, name) { }
 
         protected override string checkFullName() => this.Cursor.GetFullNamespace();
-
-        public void SetAsRoot()
-        {
-            this.Root = this;
-        }
 
         protected override void makeXml(XmlElement element)
         {
@@ -466,16 +600,48 @@ namespace ExportCpp
         }
     }
 
+    public class Global : Namespace
+    {
+        private Dictionary<string, Declaration> mFullDeclarations = new Dictionary<string, Declaration>();
+
+        internal Global(CppAnalyzer analyzer) : base(analyzer, "global") { }
+
+        public void UnregisterDeclaration(Declaration declaration)
+        {
+            Declaration? record;
+            if (mFullDeclarations.Remove(declaration.FullName, out record))
+            {
+                Tracer.Assert(declaration == record);
+            }
+        }
+
+        public void RegisterDeclaration(Declaration declaration)
+        {
+            mFullDeclarations.Add(declaration.FullName, declaration);
+        }
+    }
+
     internal class Argument : Declaration
     {
         public override string? ExportMacro => null;
 
-        public DeclarationType Type { get; init; }
+        public CXType CXType { get; init; }
+
+        private DeclarationType? mType = null;
+        public DeclarationType Type => mType ?? throw new InvalidOperationException($"Make sure there is a valid {nameof(DeclarationType)}, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpTypeString = null;
+        public string CSharpTypeString => mCSharpTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpUnmanagedTypeString = null;
+        public string CSharpUnmanagedTypeString => mCSharpUnmanagedTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# unmanaged type string, and {nameof(Declaration.Analyze)} has been invoked");
 
         public bool IsPointer => CXTypeKind.CXType_Pointer == this.Type.CXType.kind || CXTypeKind.CXType_ObjCObjectPointer == this.Type.CXType.kind;
         public bool IsLeftValueReference => CXTypeKind.CXType_LValueReference == this.Type.CXType.kind;
         public bool IsRightValueReference => CXTypeKind.CXType_RValueReference == this.Type.CXType.kind;
         public bool IsReference => this.IsLeftValueReference || this.IsRightValueReference;
+
+        public virtual string DerivedName => "derived" + char.ToUpper(this.Name[0]) + this.Name.Substring(1);
 
         public Argument(CppContext context, CXCursor cursor) : this(context, cursor, cursor.Type) { }
 
@@ -486,8 +652,15 @@ namespace ExportCpp
 
         public Argument(CppContext context, CXCursor cursor, CXType type) : base(context, cursor)
         {
-            Type declaredType = this.FindType(context, type) ?? throw new InvalidOperationException($"There is no type {type.GetOriginalTypeName()}");
-            this.Type = new DeclarationType(type, declaredType, declaredType.ToCSharpTypeString(), declaredType.ToCSharpUnmanagedTypeString());
+            this.CXType = type;
+        }
+
+        internal override void internalAnalyze(CppContext context)
+        {
+            Type declaredType = this.FindType(context, this.CXType) ?? throw new InvalidOperationException($"There is no type {this.CXType.GetOriginalTypeName()}");
+            mCSharpTypeString = declaredType.ToCSharpTypeString();
+            mCSharpUnmanagedTypeString = declaredType.ToCSharpUnmanagedTypeString();
+            mType = new DeclarationType(this.CXType, declaredType);
         }
 
         protected override void makeXml(XmlElement element)
@@ -513,9 +686,44 @@ namespace ExportCpp
             }
         }
 
+        private string checkCppExportArgumentTypeString()
+        {
+            Type type = this.Type.DeclaredType;
+            return type.MakeCppExportArgumentTypeString();
+        }
+
         public override string ToCppCode()
         {
-            return $"{this.Type.DeclaredType.ToCppTypeString()} {this.Name}";
+            return $"{this.checkCppExportArgumentTypeString()} {this.Name}";
+        }
+
+        public string ToCppExportArgumentCode()
+        {
+            return $"{this.checkCppExportArgumentTypeString()} {this.Name}";
+        }
+
+        private bool checkShouldCastType()
+        {
+            return this.Type.DeclaredType.CheckCppShouldCastExportArgumentTypeToInvocationType();
+        }
+
+        public string? MakeDynamicCastCode()
+        {
+            if (!this.checkShouldCastType())
+            {
+                return null;
+            }
+
+            Type type = this.Type.DeclaredType;
+            string? content = type.MakeCppExportArgumentCastString(this.Name, this.DerivedName);
+            return string.IsNullOrWhiteSpace(content) ? null : (content + ';');
+        }
+
+        public string ToCppInvocationCode()
+        {
+            Type type = this.Type.DeclaredType;
+            string argumentName = this.checkShouldCastType() ? this.DerivedName : this.Name;
+            return type.MakeCppExportInvocationCastString(argumentName) ?? argumentName;
         }
 
         public override string ToCSharpCode()
@@ -525,7 +733,7 @@ namespace ExportCpp
 
         public override string ToString()
         {
-            return $"{nameof(Argument)} {this.Type.CXType.Spelling} {this.Name}";
+            return $"{nameof(Argument)} {this.CXType.Spelling} {this.Name}";
         }
     }
 
@@ -542,30 +750,24 @@ namespace ExportCpp
         public override string? ExportMacro => CppAnalyzer.ExportFunctionMacro;
 
         public CXCursor MethodCursor { get; init; }
+        public bool IsStatic => this.MethodCursor.IsStatic;
 
-        public Type ReturnType { get; protected set; }
+        private Type? mReturnType = null;
+        public Type ReturnType => mReturnType ?? throw new InvalidOperationException($"Make sure there is a valid return type, and {nameof(Declaration.Analyze)} has been invoked");
 
         public string? BindingName => this.ExportContents.Length > INDEX_EXPORT_NAME ? this.ExportContents[INDEX_EXPORT_NAME] : null;
         public string? DefaultReturnValue => this.ExportContents.Length > INDEX_EXPORT_DEFAULT_VALUE ? this.ExportContents[INDEX_EXPORT_DEFAULT_VALUE] : null;
 
-        public Argument[] Arguments { get; init; }
+        public Argument[] Arguments { get; protected set; } = new Argument[0];
 
         public Function(CppContext context, CXCursor cursor) : base(context, cursor)
         {
             this.MethodCursor = this.checkMethodCursor();
-            this.ReturnType = this.checkReturnType(context);
-
-            List<Argument> arguments = new List<Argument>();
-            for (uint i = 0; i < cursor.NumArguments; ++i)
-            {
-                arguments.Add(new Argument(context, cursor.GetArgument(i)));
-            }
-            this.Arguments = arguments.ToArray();
         }
 
         private CXCursor checkMethodCursor()
         {
-            if (CXCursorKind.CXCursor_CXXMethod == this.Cursor.kind || CXCursorKind.CXCursor_TypedefDecl == this.Cursor.kind)
+            if (CXCursorKind.CXCursor_CXXMethod == this.Cursor.kind || CXCursorKind.CXCursor_Constructor == this.Cursor.kind || CXCursorKind.CXCursor_TypedefDecl == this.Cursor.kind)
             {
                 return this.Cursor;
             }
@@ -587,6 +789,22 @@ namespace ExportCpp
 
         protected override string checkFullName() => $"{this.Cursor.SemanticParent.GetFullTypeName()}::{this.Name}";
 
+        internal override void internalAnalyze(CppContext context)
+        {
+            base.internalAnalyze(context);
+
+            mReturnType = this.checkReturnType(context);
+
+            List<Argument> arguments = new List<Argument>();
+            for (uint i = 0; i < this.MethodCursor.NumArguments; ++i)
+            {
+                Argument argument = new Argument(context, this.MethodCursor.GetArgument(i));
+                argument.Analyze(context);
+                arguments.Add(argument);
+            }
+            this.Arguments = arguments.ToArray();
+        }
+
         protected override void makeXml(XmlElement element)
         {
             element.SetAttribute(nameof(ReturnType), this.ReturnType?.FullName);
@@ -598,12 +816,18 @@ namespace ExportCpp
             }
         }
 
-        public string MakeCppExportDeclaration()
+        public virtual string MakeCppExportDeclaration()
         {
             Type returnType = this.checkCppExportReturnType();
             string exportName = this.checkCppExportFunctionName();
             List<string> arguments = this.checkCppExportArguments();
-            return $"__declspec (dllexport) {returnType.ToCppTypeString()} {exportName}({string.Join(", ", arguments)})";
+            string prefix = "__declspec (dllexport)";
+            if (this.MethodCursor.ReturnType.IsConst())
+            {
+                prefix += " const";
+            }
+            string returnTypeString = returnType.MakeCppExportReturnTypeString();
+            return $"{prefix} {returnTypeString} {exportName}({string.Join(", ", arguments)})";
         }
 
         protected virtual Type checkCppExportReturnType() => this.ReturnType;
@@ -618,46 +842,65 @@ namespace ExportCpp
 
         protected virtual List<string> checkCppExportArguments()
         {
-            List<string> arguments = this.Arguments.Select(a => a.ToCppCode()).ToList(); ;
-            arguments.Insert(0, $"{(this.Parent as Class ?? throw new InvalidOperationException()).ExportAsType?.MakePointerType().ToCppTypeString()} {VARIABLE_NAME_INSTANCE}");
+            List<string> arguments = this.Arguments.Select(a => a.ToCppExportArgumentCode()).ToList();
+            if (!this.IsStatic)
+            {
+                arguments.Insert(0, $"{(this.Parent as Class ?? throw new InvalidOperationException()).ExportAsType?.MakePointerType().ToCppTypeString()} {VARIABLE_NAME_INSTANCE}");
+            }
             return arguments;
         }
 
         public virtual List<string> MakeCppExportDefinition()
         {
-            string instanceName = VARIABLE_NAME_INSTANCE;
-            List<string> contents = new List<string>();
-            string returnContent = typeof(void) == this.ReturnType ? "return" : $"return {this.DefaultReturnValue ?? throw new InvalidOperationException()}";
-            contents.Add($"if (!{instanceName}) {returnContent};");
-
             Class? parent = this.Parent as Class;
-            if (parent is not null)
+            Type? type = parent?.Type.DeclaredType;
+            Type returnType = this.ReturnType;
+            string instanceName = VARIABLE_NAME_INSTANCE;
+
+            string returnContent = typeof(void) == returnType ? "return" : $"return {this.DefaultReturnValue ?? throw new InvalidOperationException()}";
+            List<string> contents = new List<string>();
+            if (!this.IsStatic)
             {
-                if (parent.Type.DeclaredType != parent.ExportAsType)
+                contents.Add($"if (!{instanceName}) {returnContent};");
+
+                if (parent is not null)
                 {
-                    string derivedName = VARIABLE_NAME_DERIVED_INSTANCE;
-                    contents.Add("");
-                    contents.Add($"{parent.Type.DeclaredType.MakePointerType().ToCppTypeString()} {derivedName} = dynamic_cast<{parent.Type.DeclaredType.MakePointerType().ToCppTypeString()}>({instanceName});");
-                    contents.Add($"if (!{derivedName}) {returnContent};");
-                    contents.Add("");
-                    instanceName = derivedName;
+                    if (type is null)
+                    {
+                        throw new InvalidOperationException("If parent is not null, there must be a declared type");
+                    }
+
+                    if (type != parent.ExportAsType)
+                    {
+                        string derivedName = VARIABLE_NAME_DERIVED_INSTANCE;
+                        string targetType = type.MakePointerType().ToCppTypeString();
+                        contents.Add("");
+                        contents.Add($"{targetType} {derivedName} = dynamic_cast<{targetType}>({instanceName});");
+                        contents.Add($"if (!{derivedName}) {returnContent};");
+                        contents.Add("");
+                        instanceName = derivedName;
+                    }
                 }
             }
 
-            string execution = $"{instanceName}->{this.Name}({string.Join(", ", this.Arguments.Select(a => a.Name))})";
-            if (typeof(void) == this.ReturnType)
+            List<string> arguments = new List<string>();
+            foreach (Argument argument in this.Arguments)
             {
-                contents.Add(execution + ";");
-            }
-            else
-            {
-                CppType? cppType = this.ReturnType as CppType;
-                if (cppType is not null)
+                string? castCode = argument.MakeDynamicCastCode();
+                if (!string.IsNullOrWhiteSpace(castCode))
                 {
-                    execution = cppType.ConvertToCppResult(execution);
+                    contents.Add(castCode);
+                    contents.Add($"if (!{argument.DerivedName}) {returnContent};");
+                    contents.Add("");
                 }
-                contents.Add($"return {execution};");
+
+                arguments.Add(argument.ToCppInvocationCode());
             }
+
+            string argumentContents = string.Join(", ", arguments);
+            string execution = this.IsStatic ? $"{type?.ToCppTypeString()}::{this.Name}({argumentContents})" : $"{instanceName}->{this.Name}({argumentContents})";
+            string content = returnType.MakeCppExportReturnValueString(execution);
+            contents.Add(typeof(void) == returnType ? content + ";" : $"return {content};");
             return contents;
         }
 
@@ -673,7 +916,7 @@ namespace ExportCpp
             foreach (Argument argument in this.Arguments)
             {
                 arguments.Add(argument.ToCSharpCode());
-                hasUnsafeArgument = hasUnsafeArgument || argument.Type.IsUnsafe;
+                hasUnsafeArgument = hasUnsafeArgument || argument.IsUnsafe;
             }
 
             string bindingName;
@@ -693,7 +936,7 @@ namespace ExportCpp
 
         public override string ToString()
         {
-            return $"{base.ToString()}, return: {this.ReturnType.FullName}";
+            return $"{base.ToString()}, return: {mReturnType?.FullName}";
         }
     }
 
@@ -701,13 +944,25 @@ namespace ExportCpp
     {
         public override string? ExportMacro => CppAnalyzer.ExportFunctionPointerMacro;
 
-        public DeclarationType Type { get; init; }
 
-        public string FunctionTypeString => this.Type.CXType.PointeeType.Spelling.CString;
+        protected DeclarationType? mType = null;
+        public DeclarationType Type => mType ?? throw new InvalidOperationException($"Make sure there is a valid {nameof(DeclarationType)}, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpTypeString = null;
+        public string CSharpTypeString => mCSharpTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpUnmanagedTypeString = null;
+        public string CSharpUnmanagedTypeString => mCSharpUnmanagedTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# unmanaged type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        public override bool IsUnsafe => true;
+
+        private CXType mCXType;
+        public string FunctionTypeString => mCXType.PointeeType.Spelling.CString;
 
         public FunctionPointer(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            CXType pointeeType = cursor.Type.PointeeType;
+            mCXType = cursor.Type;
+
             // fix end index and content, it will be wrong if call convention is set
             int closeIndex = context.FileContent.IndexOf(';', this.Index + 1);
             if (this.CloseIndex != closeIndex)
@@ -715,7 +970,15 @@ namespace ExportCpp
                 this.CloseIndex = closeIndex;
                 this.Content = this.Index > 0 && this.CloseIndex > this.Index ? context.FileContent.Substring(this.Index, this.CloseIndex - this.Index + 1) : "";
             }
+        }
 
+        protected override Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.Type.PointeeType.ResultType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.Type.PointeeType.ResultType.GetOriginalTypeName()}");
+
+        internal override void internalAnalyze(CppContext context)
+        {
+            base.internalAnalyze(context);
+
+            CXType pointeeType = this.Cursor.Type.PointeeType;
             int argumentCount = pointeeType.NumArgTypes;
             string csharpTypeString = $"delegate* unmanaged[Cdecl]<{this.ReturnType.ToUnmanagedString()}>";
             if (argumentCount > 0)
@@ -728,7 +991,8 @@ namespace ExportCpp
                 for (uint i = 0; i < pointeeType.NumArgTypes; ++i)
                 {
                     Argument argument = new Argument(context, pointeeType.GetArgType(i), CppAnalyzer.CheckArgumentName(argumentContents[i]));
-                    unmanagedArguments.Add(argument.Type.CSharpUnmanagedTypeString);
+                    argument.Analyze(context);
+                    unmanagedArguments.Add(argument.CSharpUnmanagedTypeString);
                     arguments.Add(argument);
                 }
                 this.Arguments = arguments.ToArray();
@@ -736,13 +1000,49 @@ namespace ExportCpp
                 csharpTypeString = $"delegate* unmanaged[Cdecl]<{string.Join(", ", unmanagedArguments)}, {this.ReturnType.ToUnmanagedString()}>";
             }
 
-            this.Type = new DeclarationType(cursor.Type, new CppType(this), csharpTypeString, csharpTypeString);
+            mCSharpTypeString = mCSharpUnmanagedTypeString = csharpTypeString;
+            mType = new DeclarationType(mCXType, new CppType(this));
         }
-        protected override Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.Type.PointeeType.ResultType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.Type.PointeeType.ResultType.GetOriginalTypeName()}");
 
         bool ITypeDeclaration.MatchTypeName(string name)
         {
-            return this.Name == name || this.FullName.EndsWith(name) || this.FunctionTypeString == name;
+            return this.Name == name || this.FullName.EndsWith($"::{name}") || this.FunctionTypeString == name;
+        }
+
+        public string ToCppExportArgumentTypeString()
+        {
+            return this.FullName;
+        }
+
+        public bool CheckCppShouldCastExportArgumentTypeToInvocationType()
+        {
+            return false; // Assuming no cast for function pointer
+        }
+
+        public string? ToCppExportArgumentCastString(string argumentName, string targetName)
+        {
+            return null; // Assuming no cast for function pointer
+        }
+
+        public string? ToCppExportInvocationCastString(string content)
+        {
+            return null; // Assuming no cast for function pointer
+        }
+
+        public string ToCppExportReturnTypeString()
+        {
+            Debugger.Break();
+            throw new InvalidOperationException("Do not support export function pointer as return type");
+        }
+
+        public string ToCppExportReturnValueString(string content)
+        {
+            return content;
+        }
+
+        public string ToCppExportTypeString()
+        {
+            return mCXType.PointeeType.Spelling.CString;
         }
     }
 
@@ -752,10 +1052,9 @@ namespace ExportCpp
 
         public override string? ExportMacro => CppAnalyzer.ExportConstructorMacro;
 
-        public Constructor(CppContext context, CXCursor cursor) : base(context, cursor)
-        {
-            this.ReturnType = this.FindType(context, cursor.SemanticParent.GetFullTypeName()) ?? throw new InvalidOperationException($"There is no type {cursor.SemanticParent.GetFullTypeName()}"); ;
-        }
+        public Constructor(CppContext context, CXCursor cursor) : base(context, cursor) { }
+
+        protected override Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.SemanticParent.GetFullTypeName()) ?? throw new InvalidOperationException($"There is no type {this.Cursor.SemanticParent.GetFullTypeName()}");
 
         protected override Type checkCppExportReturnType() => this.ReturnType.MakePointerType();
 
@@ -766,7 +1065,22 @@ namespace ExportCpp
         public override List<string> MakeCppExportDefinition()
         {
             List<string> contents = new List<string>();
-            contents.Add($"return new {this.ReturnType.FullName}({string.Join(", ", this.Arguments.Select(a => a.Name))});");
+
+            List<string> arguments = new List<string>();
+            foreach (Argument argument in this.Arguments)
+            {
+                string? castCode = argument.MakeDynamicCastCode();
+                if (!string.IsNullOrWhiteSpace(castCode))
+                {
+                    contents.Add(castCode);
+                    contents.Add($"if (!{argument.DerivedName}) return nullptr;");
+                    contents.Add("");
+                }
+
+                arguments.Add(argument.ToCppInvocationCode());
+            }
+
+            contents.Add($"return new {this.ReturnType.FullName}({string.Join(", ", arguments)});");
             return contents;
         }
 
@@ -782,29 +1096,54 @@ namespace ExportCpp
         private const int INDEX_EXPORT_AS = 0;
         private const int INDEX_EXPORT_PREFIX = 1;
 
-        public DeclarationType Type { get; init; }
-        public Type? ExportAsType { get; private set; }
+        private DeclarationType? mType = null;
+        public DeclarationType Type => mType ?? throw new InvalidOperationException($"Make sure there is a valid {nameof(DeclarationType)}, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpTypeString = null;
+        public string CSharpTypeString => mCSharpTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpUnmanagedTypeString = null;
+        public string CSharpUnmanagedTypeString => mCSharpUnmanagedTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# unmanaged type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        public override bool IsUnsafe => this.CSharpTypeString.Contains('*') || this.CSharpTypeString.Contains("unmanaged");
+
+        private Type? mExportAsType = null;
+        public Type ExportAsType => mExportAsType ?? throw new InvalidOperationException($"Make sure this type has been marked as export, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private Type mCSharpType;
+        private CXType mCXType;
 
         public string? BindingPrefix => this.ExportContents.Length > INDEX_EXPORT_PREFIX ? this.ExportContents[INDEX_EXPORT_PREFIX] : "";
 
         internal Class(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            this.Type = new DeclarationType(cursor.Type, this.checkDeclaredType(), typeof(IntPtr).ToCSharpTypeString(), typeof(IntPtr).ToCSharpUnmanagedTypeString());
-
-            if (this.ExportContents.Length > INDEX_EXPORT_AS)
-            {
-                string exportString = this.ExportContents[INDEX_EXPORT_AS];
-                this.ExportAsType = this.Name == exportString ? this.Type.DeclaredType : this.FindType(context, exportString) ?? throw new InvalidOperationException($"There is no type {exportString}, mark it with {CppAnalyzer.ExportClassMacro}|{CppAnalyzer.ExportStructMacro}|{CppAnalyzer.ExportEnumMacro} and make sure it is processed in front of this type");
-            }
+            mCSharpType = typeof(IntPtr);
+            mCXType = cursor.Type;
         }
 
-        protected Class(string name, Type csharpType, Type exportAsType) : base(name)
+        protected Class(CppAnalyzer analyzer, string name, Type csharpType, Type exportAsType) : base(analyzer, name)
         {
-            this.Type = new DeclarationType(new CXType(), this.checkDeclaredType(), csharpType.ToCSharpTypeString(), csharpType.ToCSharpUnmanagedTypeString());
-            this.ExportAsType = exportAsType;
+            mExportAsType = exportAsType;
+            mCSharpType = csharpType;
+            mCXType = new CXType();
         }
 
         protected virtual Type checkDeclaredType() => new CppType(this);
+
+        internal override void internalAnalyze(CppContext context)
+        {
+            base.internalAnalyze(context);
+
+            mCSharpTypeString = mCSharpType.ToCSharpTypeString();
+            mCSharpUnmanagedTypeString = mCSharpType.ToCSharpUnmanagedTypeString();
+            mType = new DeclarationType(mCXType, this.checkDeclaredType());
+
+            if (mExportAsType is null && this.ExportContents.Length > INDEX_EXPORT_AS)
+            {
+                string exportString = this.ExportContents[INDEX_EXPORT_AS];
+                mExportAsType = this.Name == exportString ? this.Type.DeclaredType : this.FindType(context, exportString) ?? throw new InvalidOperationException($"There is no type {exportString}, mark it with {CppAnalyzer.ExportClassMacro}|{CppAnalyzer.ExportStructMacro}|{CppAnalyzer.ExportEnumMacro} and make sure it is processed in front of this type");
+            }
+        }
 
         protected override void internalMerge(Declaration other)
         {
@@ -818,7 +1157,7 @@ namespace ExportCpp
 
         bool ITypeDeclaration.MatchTypeName(string name)
         {
-            return this.Name == name || this.FullName.EndsWith(name);
+            return this.Name == name || this.FullName.EndsWith($"::{name}");
         }
 
         protected override void makeXml(XmlElement element)
@@ -826,26 +1165,244 @@ namespace ExportCpp
             element.SetAttribute(nameof(FullName), this.FullName);
             element.SetAttribute(nameof(BindingPrefix), this.BindingPrefix);
         }
+
+        public string ToCppExportArgumentTypeString()
+        {
+            string? content = this.Analyzer.MakeCppExportArgumentTypeString(this.Type.DeclaredType);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = this.Analyzer.MakeCppExportArgumentTypeString(this.ExportAsType);
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    content = this.ExportAsType.ToCppTypeString() + "*";
+                }
+            }
+            return content;
+        }
+
+        public bool CheckCppShouldCastExportArgumentTypeToInvocationType()
+        {
+            bool? result = this.Analyzer.CheckCppShouldCastExportArgumentTypeToInvocationType(this.Type.DeclaredType);
+            if (!result.HasValue)
+            {
+                result = this.Analyzer.CheckCppShouldCastExportArgumentTypeToInvocationType(this.ExportAsType);
+            }
+            return result.HasValue ? result.Value : this.Type.DeclaredType != this.ExportAsType;
+        }
+
+        public string? ToCppExportArgumentCastString(string argumentName, string targetName)
+        {
+            string? content = this.Analyzer.MakeCppExportArgumentCastString(this.Type.DeclaredType, argumentName, targetName);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = this.Analyzer.MakeCppExportArgumentCastString(this.ExportAsType, argumentName, targetName);
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    string declaredType = this.Type.DeclaredType.ToCppTypeString();
+                    content = $"{declaredType}* {targetName} = dynamic_cast<{declaredType}*>({argumentName})";
+                }
+            }
+            return content;
+        }
+
+        public string? ToCppExportInvocationCastString(string content)
+        {
+            return null; 
+        }
+
+        public string ToCppExportReturnTypeString()
+        {
+            string? content = this.Analyzer.MakeCppExportReturnTypeString(this.Type.DeclaredType);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = this.Analyzer.MakeCppExportReturnTypeString(this.ExportAsType);
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    content = this.ExportAsType.ToCppString();
+                    if (string.IsNullOrWhiteSpace(content))
+                    {
+                        content = this.FullName + "*"; // Assuming it must be a pointer when return a class type
+                    }
+                }
+            }
+            return content;
+        }
+
+        public string ToCppExportReturnValueString(string inputContent)
+        {
+            string? content = this.Analyzer.MakeCppExportReturnValueString(this.Type.DeclaredType, inputContent);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = this.Analyzer.MakeCppExportReturnValueString(this.ExportAsType, inputContent);
+                if (string.IsNullOrWhiteSpace(content))
+                {
+                    content = inputContent;
+                }
+            }
+            return content;
+        }
+
+        public string ToCppExportTypeString()
+        {
+            Type returnType = mExportAsType ?? throw new InvalidOperationException($"Make sure {this.FullName} has been marked as export");
+            return this.Analyzer.MakeCppExportTypeString(returnType) ?? (returnType.ToCppTypeString() + "*");
+        }
+    }
+
+    public class ClassTemplate : Class, ITemplateTypeDeclaration
+    {
+        internal ClassTemplate(CppContext context, CXCursor cursor) : base(context, cursor) { }
+
+        protected ClassTemplate(CppAnalyzer analyzer, string name, Type csharpType, Type exportAsType) : base(analyzer, name, csharpType, exportAsType) { }
+
+        internal Type MakeGenericType(CppContext context, CXType type)
+        {
+            List<Type> arguments = new List<Type>();
+            int templateArgumentCount = type.NumTemplateArguments;
+            for (uint i = 0; i < templateArgumentCount; ++i)
+            {
+                CXType argumentType;
+                CX_TemplateArgument templateArgument = type.GetTemplateArgument(i);
+                switch (templateArgument.kind)
+                {
+                    case CXTemplateArgumentKind.CXTemplateArgumentKind_Type:
+                        argumentType = templateArgument.AsType;
+                        arguments.Add(this.FindType(context, argumentType) ?? throw new InvalidOperationException($"There is no type {argumentType.GetOriginalTypeName()}"));
+                        break;
+                    default: throw new NotImplementedException();
+                }
+            }
+            return new CppTemplateType(this, type, arguments);
+        }
+
+        public string ToCppExportArgumentTypeString(Type[] arguments)
+        {
+            string? content = this.Analyzer.MakeCppExportArgumentTypeString(this, arguments);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = $"{this.FullName}<{string.Join(", ", arguments.Select(a => a.MakeCppExportReturnTypeString()))}>";
+            }
+            return content;
+        }
+
+        public bool CheckCppShouldCastExportArgumentTypeToInvocationType(Type[] arguments)
+        {
+            bool? result = this.Analyzer.CheckCppShouldCastExportArgumentTypeToInvocationType(this, arguments);
+            return result.HasValue ? result.Value : false;
+        }
+
+        public string? ToCppExportArgumentCastString(Type[] arguments, string argumentName, string targetName)
+        {
+            return this.Analyzer.MakeCppExportArgumentCastString(this, arguments, argumentName, targetName);
+        }
+
+        public string? ToCppExportInvocationCastString(Type[] arguments, string content)
+        {
+            return this.Analyzer.MakeCppExportInvocationCastString(this, arguments, content);
+        }
+
+        public string ToCppExportReturnTypeString(Type[] arguments)
+        {
+            string? content = this.Analyzer.MakeCppExportReturnTypeString(this, arguments);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = $"{this.FullName}<{string.Join(", ", arguments.Select(a => a.MakeCppExportReturnTypeString()))}>";
+            }
+            return content;
+        }
+
+        public string ToCppExportReturnValueString(Type[] arguments, string content)
+        {
+            return this.Analyzer.MakeCppExportReturnValueString(this, arguments, content) ?? content;
+        }
+
+        public string ToCppExportTypeString(Type[] arguments)
+        {
+            string? content = this.Analyzer.MakeCppExportTypeString(this, arguments);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                content = $"{this.FullName}<{string.Join(", ", arguments.Select(a => a.MakeCppExportReturnTypeString()))}>";
+            }
+            return content;
+        }
+
+        public string ToCppExportTypeString(IEnumerable<Type> arguments)
+        {
+            return this.Analyzer.MakeCppExportTypeString(this, arguments.ToArray()) ?? base.ToCppExportTypeString();
+        }
     }
 
     internal class Struct : DeclarationCollection, ITypeDeclaration
     {
         public override string? ExportMacro => CppAnalyzer.ExportStructMacro;
 
-        public DeclarationType Type { get; init; } = new DeclarationType(new CXType(), null, null, null);
+        private CXType mCXType;
 
-        public Struct(CppContext context, CXCursor cursor) : base(context, cursor) { }
+        private DeclarationType? mType = null;
+        public DeclarationType Type => mType ?? throw new InvalidOperationException($"Make sure there is a valid {nameof(DeclarationType)}, and {nameof(Declaration.Analyze)} has been invoked");
 
-        protected override Type? getDeclaredType() => throw new NotImplementedException();
+        private string? mCSharpTypeString = null;
+        public string CSharpTypeString => mCSharpTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpUnmanagedTypeString = null;
+        public string CSharpUnmanagedTypeString => mCSharpUnmanagedTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# unmanaged type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        public Struct(CppContext context, CXCursor cursor) : base(context, cursor)
+        {
+            mCXType = cursor.Type;
+        }
+
+        internal override void internalAnalyze(CppContext context)
+        {
+            base.internalAnalyze(context);
+
+            mCSharpTypeString = mCSharpUnmanagedTypeString = this.FullName;
+            mType = new DeclarationType(mCXType, new CppType(this));
+        }
 
         bool ITypeDeclaration.MatchTypeName(string name)
         {
-            return this.Name == name || this.FullName.EndsWith(name);
+            return this.Name == name || this.FullName.EndsWith($"::{name}");
         }
 
         protected override void makeXml(XmlElement element)
         {
             element.SetAttribute(nameof(FullName), this.FullName);
+        }
+
+        public string ToCppExportArgumentTypeString()
+        {
+            return this.Analyzer.MakeCppExportArgumentTypeString(this.Type.DeclaredType) ?? this.FullName;
+        }
+
+        public bool CheckCppShouldCastExportArgumentTypeToInvocationType()
+        {
+            return false; // Assuming no cast for struct
+        }
+
+        public string? ToCppExportArgumentCastString(string argumentName, string targetName)
+        {
+            return null; // Assuming no cast for struct
+        }
+
+        public string? ToCppExportInvocationCastString(string content)
+        {
+            return null; // Assuming no cast for struct
+        }
+
+        public string ToCppExportReturnTypeString()
+        {
+            return this.Analyzer.MakeCppExportReturnTypeString(this.Type.DeclaredType) ?? this.FullName;
+        }
+
+        public string ToCppExportReturnValueString(string content)
+        {
+            return this.Analyzer.MakeCppExportReturnValueString(this.Type.DeclaredType, content) ?? content;
+        }
+
+        public string ToCppExportTypeString()
+        {
+            return this.Analyzer.MakeCppExportTypeString(this.Type.DeclaredType) ?? this.FullName;
         }
     }
 
@@ -879,19 +1436,25 @@ namespace ExportCpp
 
         public string[] Values { get; private set; } = new string[0];
 
-        public DeclarationType Type { get; init; }
+
+        private DeclarationType? mType = null;
+        public DeclarationType Type => mType ?? throw new InvalidOperationException($"Make sure there is a valid {nameof(DeclarationType)}, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpTypeString = null;
+        public string CSharpTypeString => mCSharpTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# type string, and {nameof(Declaration.Analyze)} has been invoked");
+
+        private string? mCSharpUnmanagedTypeString = null;
+        public string CSharpUnmanagedTypeString => mCSharpUnmanagedTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# unmanaged type string, and {nameof(Declaration.Analyze)} has been invoked");
 
         public Enum(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            string csharpTypeString = this.BindingName = this.ExportContents.Length > INDEX_NAME ? this.ExportContents[INDEX_NAME] : "";
-            this.Type = new DeclarationType(cursor.Type, new CppType(this), csharpTypeString, csharpTypeString);
+            mCSharpTypeString = mCSharpUnmanagedTypeString = this.BindingName = this.ExportContents.Length > INDEX_NAME ? this.ExportContents[INDEX_NAME] : "";
+            mType = new DeclarationType(cursor.Type, new CppType(this));
         }
-
-        protected override Type? getDeclaredType() => throw new NotImplementedException();
 
         bool ITypeDeclaration.MatchTypeName(string name)
         {
-            return this.Name == name || this.FullName.EndsWith(name);
+            return this.Name == name || this.FullName.EndsWith($"::{name}");
         }
 
         protected override void makeXml(XmlElement element)
@@ -904,6 +1467,41 @@ namespace ExportCpp
                 e.InnerText = value;
                 element.AppendChild(e);
             }
+        }
+
+        public string ToCppExportArgumentTypeString()
+        {
+            return this.Analyzer.MakeCppExportArgumentTypeString(this.Type.DeclaredType) ?? this.FullName;
+        }
+
+        public bool CheckCppShouldCastExportArgumentTypeToInvocationType()
+        {
+            return false; // Assuming no cast for enum
+        }
+
+        public string? ToCppExportArgumentCastString(string argumentName, string targetName)
+        {
+            return null; // Assuming no cast for enum
+        }
+
+        public string? ToCppExportInvocationCastString(string content)
+        {
+            return null; // Assuming no cast for enum
+        }
+
+        public string ToCppExportReturnTypeString()
+        {
+            return this.Analyzer.MakeCppExportReturnTypeString(this.Type.DeclaredType) ?? this.FullName;
+        }
+
+        public string ToCppExportReturnValueString(string content)
+        {
+            return this.Analyzer.MakeCppExportReturnValueString(this.Type.DeclaredType, content) ?? content;
+        }
+
+        public string ToCppExportTypeString()
+        {
+            return this.Analyzer.MakeCppExportTypeString(this.Type.DeclaredType) ?? this.FullName;
         }
     }
 

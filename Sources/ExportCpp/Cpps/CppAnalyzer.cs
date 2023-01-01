@@ -47,7 +47,7 @@ namespace ExportCpp
 
         public HashSet<string> ProcessedFiles { get; init; } = new HashSet<string>();
 
-        private Namespace mGlobal;
+        public Global Global { get; init; }
 
         public CppAnalyzer(string solutionFilename, string projectFilename, string exportFilename, string bindingFilename, string libraryName, string bindingClassname)
         {
@@ -63,31 +63,12 @@ namespace ExportCpp
             this.LibraryName = libraryName;
             this.BindingClassname = bindingClassname;
 
-            mGlobal = this.initializeGlobal();
+            this.Global = new Global(this);
         }
 
         public void SetBindingNamespace(string? bindingNamespace)
         {
             this.BindingNamespace = bindingNamespace;
-        }
-
-        /// <summary>
-        /// Set custom declaration, will throw exception if fullname is invalid
-        /// </summary>
-        /// <exception cref="InvalidOperationException">If fullname is invalid, such as invalid ancestor</exception>
-        public void SetCustomDeclaration(string fullname, Declaration declaration)
-        {
-            DeclarationCollection? parent = mGlobal;
-            string[] parts = fullname.Split(new[] { "::", "." }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string part in parts.Take(parts.Length - 1))
-            {
-                parent = parent?.GetDeclaration(part)as DeclarationCollection;
-            }
-            if (parent is null)
-            {
-                throw new InvalidOperationException($"Invalid path {fullname}");
-            }
-            parent.SetDeclaration(declaration);
         }
 
         private void printVersion()
@@ -242,7 +223,8 @@ namespace ExportCpp
 
                     translationUnit.Save(this.CompiledPchFilename, CXSaveTranslationUnit_Flags.CXSaveTranslationUnit_None);
 
-                    for (uint i = 0; i < translationUnit.Cursor.NumDecls; ++i)
+                    uint declarationCount = (uint)translationUnit.Cursor.NumDecls;
+                    for (uint i = 0; i < declarationCount; ++i)
                     {
                         CXCursor cursor = translationUnit.Cursor.GetDecl(i);
                         CXSourceLocation location = cursor.Location;
@@ -254,19 +236,19 @@ namespace ExportCpp
                         CXFile file;
                         uint line, column, offset;
                         location.GetFileLocation(out file, out line, out column, out offset);
-                        string realPath = file.TryGetRealPathName().CString;
-                        if (string.IsNullOrWhiteSpace(realPath) || !PathUtility.IsPathUnderDirectory(realPath, this.ProjectDirectory))
+                        string filename = this.checkFullPathForProjectFile(file.TryGetRealPathName().CString);
+                        if (string.IsNullOrWhiteSpace(filename) || !PathUtility.IsPathUnderDirectory(filename, this.ProjectDirectory))
                         {
                             continue;
                         }
 
-                        CppContext context = this.createCppContext(this.checkFullPathForProjectFile(realPath));
-                        if (ExportMacros.All(e => context.FileContent.IndexOf(e) < 0))
-                        {
-                            continue;
-                        }
+                        System.Diagnostics.Trace.WriteLine($"{filename}: {cursor}");
+                        CppContext context = this.createCppContext(filename);
+                        //if (ExportMacros.All(e => context.FileContent.IndexOf(e) < 0))
+                        //{
+                        //    continue;
+                        //}
                         this.analyzeCursor(context, cursor);
-                        this.ProcessedFiles.Add(context.Filename);
                     }
                 }
             }
@@ -326,27 +308,50 @@ namespace ExportCpp
                 this.analyzeFile(filename);
             }
 
-            /*XmlNodeList sourceList = document.GetElementsByTagName("ClCompile");
-            foreach (XmlNode sourceNode in sourceList)
+            CppContext context = this.createCppContext("");
+            ConsoleLogger.Log("Analyzing ...");
+            this.Global.Analyze(context);
+
+            while (context.FailedDeclarations.Count() > 0)
             {
-                string? sourceFilename = sourceNode.Attributes?["Include"]?.InnerText;
-                if (string.IsNullOrWhiteSpace(sourceFilename))
+                Declaration[] declarations = context.FailedDeclarations.Select(f => f.declaration).ToArray();
+                context.ClearFailedDeclarations();
+
+                ConsoleLogger.Log("Analyzing ...");
+                foreach (Declaration declaration in declarations)
                 {
-                    continue;
+                    declaration.Analyze(context);
                 }
 
-                this.analyzeSource(Path.Combine(this.Directory ?? "", sourceFilename));
-            }*/
+                Declaration[] differences = context.FailedDeclarations.Select(f => f.declaration).Except(declarations).ToArray();
+                if (context.FailedDeclarations.Count() == declarations.Length && 0 == differences.Length)
+                {
+                    foreach (FailedDeclaration fail in context.FailedDeclarations)
+                    {
+                        string message = $"Analyze error: {fail.declaration.GetType().Name} {fail.declaration.Name}"; // Declaration.ToString might throw exception
+                        ConsoleLogger.LogError(message);
+                        Tracer.Error(message);
 
-            //if (File.Exists(this.CompiledPchFilename))
-            //{
-            //    File.Delete(this.CompiledPchFilename);
-            //}
+                        message = fail.exception.ToString();
+                        ConsoleLogger.LogError(message);
+                        Tracer.Error(message);
+                    }
+#if !RELEASE
+                    foreach (Declaration declaration in declarations)
+                    {
+                        // Should step into method to check exceptions
+                        declaration.ForceAnalyze(context);
+                    }
+#endif
+                    throw new InvalidOperationException($"There are still {context.FailedDeclarations.Count()} failed declarations");
+                }
+            }
         }
 
         private CppContext createCppContext(string filename)
         {
-            return new CppContext(filename, mGlobal);
+            CppContext context = new CppContext(filename, this);
+            return context;
         }
 
         private void analyzeFile(string filename)
@@ -416,6 +421,8 @@ namespace ExportCpp
 
                 this.analyzeCursor(context, cursor);
             }
+
+            this.ProcessedFiles.Add(filename);
         }
 
         private void analyzeCursor(CppContext context, CXCursor cursor)
@@ -426,7 +433,8 @@ namespace ExportCpp
                 return;
             }
 
-            if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind)
+            if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind
+                || CXCursorKind.CXCursor_Destructor == cursor.kind)
             {
                 return;
             }
@@ -443,6 +451,13 @@ namespace ExportCpp
 
             if (CXCursorKind.CXCursor_FieldDecl == cursor.kind && CXCursorKind.CXCursor_ClassDecl == cursor.SemanticParent.kind) // do not export class fields, only struct fields and enum constants can be exported
             {
+                return;
+            }
+
+            if (CXCursorKind.CXCursor_UsingDirective == cursor.kind)
+            {
+                context.CurrentScope.AppendUsingNamespace(cursor);
+                this.analyzeChildCursors(context, cursor);
                 return;
             }
 
@@ -467,16 +482,21 @@ namespace ExportCpp
                 record.Merge(declaration);
             }
 
-            context.PushScope(declaration);
-            for (uint i = 0; i < cursor.NumDecls; ++i)
+            if (cursor.NumDecls > 0 && declaration is DeclarationCollection)
+            {
+                context.PushScope(declaration as DeclarationCollection ?? throw new InvalidOperationException("Only collection can be scope"));
+                this.analyzeChildCursors(context, cursor);
+                context.PopScope(declaration as DeclarationCollection ?? throw new InvalidOperationException("Only collection can be scope"));
+            }
+        }
+
+        private void analyzeChildCursors(CppContext context, CXCursor cursor)
+        {
+            int declarationCount = cursor.NumDecls;
+            for (uint i = 0; i < declarationCount; ++i)
             {
                 this.analyzeCursor(context, cursor.GetDecl(i));
             }
-            //for (uint i = 0; i < cursor.NumChildren; ++i)
-            //{
-            //    this.analyzeCursor(context, cursor.GetChild(i));
-            //}
-            context.PopScope(declaration);
         }
 
         private bool checkExportMark(CppContext context, CXCursor cursor)
@@ -522,7 +542,7 @@ namespace ExportCpp
                     writer.WriteLine(context.TabCount, "extern \"C\"");
                     writer.Write(context.TabCount, "{");
 
-                    this.export(context, mGlobal);
+                    this.export(context, this.Global);
 
                     while (context.TabCount >= 0)
                     {
@@ -660,7 +680,7 @@ namespace ExportCpp
                     writer.WriteLine(context.TabCount, $"static internal class {this.BindingClassname}");
                     writer.WriteLine(context.TabCount, "{");
 
-                    this.bind(context, mGlobal);
+                    this.bind(context, this.Global);
 
                     while (context.TabCount >= 0)
                     {
@@ -777,7 +797,7 @@ namespace ExportCpp
         {
             XmlDocument document = new XmlDocument();
             document.LoadXml("<Export></Export>");
-            this.exportXml(document.DocumentElement ?? throw new InvalidOperationException(), mGlobal as DeclarationCollection);
+            this.exportXml(document.DocumentElement ?? throw new InvalidOperationException(), this.Global as DeclarationCollection);
             document.Save(Path.ChangeExtension(this.BindingFilename, ".xml"));
         }
 
@@ -804,71 +824,74 @@ namespace ExportCpp
             }
         }
 
-        static internal CXCursor CheckPreviousCursor(CppContext context, CXCursor cursor, CXFile expectedFile)
+        static internal CXCursor CheckPreviousCursor(CXCursor cursor, CXFile expectedFile)
         {
-            CXCursor previousCursor = cursor.PreviousDecl;
-            if (previousCursor.IsExposedDeclaration() && previousCursor.Location.GetFile() == expectedFile)
-            {
-                return previousCursor;
-            }
-
+            int siblingIndex;
             CXCursor parent = cursor.SemanticParent;
-            int siblingIndex = cursor.GetSiblingIndex();
-            previousCursor = 0 == siblingIndex ? parent : parent.GetDecl((uint)siblingIndex - 1);
-            if (!previousCursor.IsExposedDeclaration())
+            CXCursor previousCursor = CXCursor.Null;
+            for (siblingIndex = cursor.GetSiblingIndex() - 1; siblingIndex > -1 && (!previousCursor.IsExposedDeclaration() || previousCursor.Location.GetFile() != expectedFile); --siblingIndex)
             {
-                return CheckPreviousCursor(context, previousCursor, expectedFile);
+                previousCursor = parent.GetDecl((uint)siblingIndex);
             }
-            if (previousCursor.Location.GetFile() != expectedFile)
-            {
-                return CheckPreviousCursor(context, previousCursor, expectedFile);
-            }
-            return previousCursor;
+            return siblingIndex > -1 ? previousCursor : parent;
         }
 
         static internal string CheckContentFromPreviousCursor(CppContext context, CXCursor cursor)
         {
-            CXCursor previousCursor = CheckPreviousCursor(context, cursor, cursor.Location.GetFile());
-            Tracer.Assert(previousCursor.Location.GetFile() == cursor.Location.GetFile());
-
-            CXFile file;
             uint line, column, offset;
+
+            CXFile file = cursor.Location.GetFile();
+            string filename = Path.GetFullPath(file.TryGetRealPathName().CString);
+            string content = context.Filename == filename ? context.FileContent : File.ReadAllText(filename);
+
+            CXCursor previousCursor = CheckPreviousCursor(cursor, cursor.Location.GetFile());
+            file = previousCursor.Location.GetFile();
+            if (string.IsNullOrWhiteSpace(file.Name.CString))
+            {
+                cursor.Location.GetFileLocation(out file, out line, out column, out offset);
+                return content.Substring(0, content.Locate((int)line, (int)column));
+            }
+
+            Tracer.Assert(file == cursor.Location.GetFile());
+
             cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-            int startIndex = context.FileContent.Locate((int)line, (int)column);
+            int startIndex = content.Locate((int)line, (int)column);
 
             int previousEndIndex = 0;
             if (!previousCursor.IsInvalid)
             {
                 previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
+                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
             }
             if (previousEndIndex > startIndex)
             {
                 previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = context.FileContent.Locate((int)line, (int)column); // offset is not accurate
+                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
             }
 
-            return context.FileContent.Substring(previousEndIndex, startIndex - previousEndIndex);
+            return content.Substring(previousEndIndex, startIndex - previousEndIndex);
         }
 
-        static internal string[] SplitArguments(string argumentsContent)
+        static internal string[] SplitContent(string content, string separator, params Tuple<char, char>[] skipScopes)
         {
-            string contents = argumentsContent.TrimStart(' ', '(').TrimEnd(' ', ')', ';');
             Stack<char> expectedSymbols = new Stack<char>();
             List<string> arguments = new List<string>();
             char c;
             int s = 0, e = 0;
-            for (; e < contents.Length; ++e)
+            for (; e < content.Length; ++e)
             {
-                c = contents[e];
-                if ('(' == c)
+                c = content[e];
+                int shouldSkip = Array.FindIndex(skipScopes, t => t.Item1 == c);
+                if (shouldSkip > -1)
                 {
-                    expectedSymbols.Push(')');
-                    continue;
-                }
-                if ('{' == c)
-                {
-                    expectedSymbols.Push('}');
+                    char start = skipScopes[shouldSkip].Item1, end = skipScopes[shouldSkip].Item2;
+                    int endIndex = content.IndexOf(end, e);
+                    int count = content.Count(start, e, endIndex);
+                    while (--count > 0)
+                    {
+                        endIndex = content.IndexOf(end, endIndex + 1);
+                    }
+                    e = endIndex;
                     continue;
                 }
 
@@ -878,16 +901,32 @@ namespace ExportCpp
                     continue;
                 }
 
-                if (',' == c)
+                if (e + separator.Length < content.Length && 0 == string.Compare(content, e, separator, 0, separator.Length))
                 {
-                    arguments.Add(contents.Substring(s, e - s).Trim());
-                    s = e + 1;
+                    arguments.Add(content.Substring(s, e - s).Trim());
+                    s = e + separator.Length;
                 }
             }
-            arguments.Add(contents.Substring(s, e - s).Trim());
+            arguments.Add(content.Substring(s, e - s).Trim());
 
             Tracer.Assert(0 == expectedSymbols.Count);
             return arguments.ToArray();
+        }
+
+        static internal string[] SplitArguments(string argumentsContent)
+        {
+            string contents = argumentsContent.TrimStart().TrimEnd(' ', ';');
+            if (contents.StartsWith('('))
+            {
+                Tracer.Assert(contents.EndsWith(')'));
+                contents = contents.Substring(1, contents.Length - 2);
+            }
+            return SplitContent(contents, ",", new Tuple<char, char>('{', '}'), new Tuple<char, char>('(', ')'), new Tuple<char, char>('<', '>'));
+        }
+
+        static internal string[] SplitFullName(string fullname)
+        {
+            return SplitContent(fullname, "::", new Tuple<char, char>('{', '}'), new Tuple<char, char>('(', ')'), new Tuple<char, char>('<', '>'));
         }
 
         static internal string CheckArgumentName(string argumentContent)
