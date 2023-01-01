@@ -123,16 +123,6 @@ namespace ExportCpp
             return this.Declaration.ToCppExportReturnValueString(content);
         }
 
-        public virtual string MakeCppExportTypeString()
-        {
-            FunctionPointer? functionPointer = this.Declaration as FunctionPointer;
-            if (functionPointer is not null)
-            {
-                return functionPointer.FullName;
-            }
-            return this.Declaration.ToCppExportTypeString();
-        }
-
         public override ConstructorInfo[] GetConstructors(BindingFlags bindingAttr)
         {
             throw new NotImplementedException();
@@ -300,11 +290,6 @@ namespace ExportCpp
             return this.IsPointer ? this : new CppTemplateType(mTemplateDeclaration, mTemplateType, mTemplateArguments, true);
         }
 
-        public string[] CheckTemplateExportArgumentTypes()
-        {
-            return mTemplateArguments.Select(t => t.MakeCppExportTypeString()).ToArray();
-        }
-
         public string[] CheckTemplateInvocationArgumentTypes()
         {
             return mTemplateArguments.Select(t => t.ToCppTypeString()).ToArray();
@@ -338,11 +323,6 @@ namespace ExportCpp
         public override string MakeCppExportReturnValueString(string content)
         {
             return mTemplateDeclaration.ToCppExportReturnValueString(mTemplateArguments.ToArray(), content);
-        }
-
-        public override string MakeCppExportTypeString()
-        {
-            return (this.Declaration as ClassTemplate ?? throw new InvalidOperationException()).ToCppExportTypeString(mTemplateArguments);
         }
 
         public override string ToCppTypeString()

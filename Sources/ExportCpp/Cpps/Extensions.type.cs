@@ -108,16 +108,5 @@ namespace ExportCpp
 
             return content;
         }
-
-        static public string MakeCppExportTypeString(this Type type)
-        {
-            CppType? cppType = type as CppType;
-            if (cppType is not null)
-            {
-                return cppType.MakeCppExportTypeString();
-            }
-
-            return type.ToCppString() ?? throw new InvalidOperationException();
-        }
     }
 }
