@@ -677,7 +677,7 @@ namespace ExportCpp
                         ++context.TabCount;
                     }
 
-                    writer.WriteLine(context.TabCount, $"static internal class {this.BindingClassname}");
+                    writer.WriteLine(context.TabCount, $"static internal unsafe class {this.BindingClassname}");
                     writer.WriteLine(context.TabCount, "{");
 
                     this.bind(context, this.Global);

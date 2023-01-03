@@ -81,8 +81,6 @@ namespace ExportCpp
         public string? ExportContent { get; private set; }
         public string[] ExportContents { get; private set; } = new string[0];
 
-        public virtual bool IsUnsafe => false;
-
         private bool mIsAnalyzed = false;
 
         public DeclarationCollection? Parent { get; private set; }
@@ -906,12 +904,10 @@ namespace ExportCpp
                 throw new InvalidOperationException("Function has no export or binding flag");
             }
 
-            bool hasUnsafeArgument = false;
             List<string> arguments = new List<string>();
             foreach (Argument argument in this.Arguments)
             {
                 arguments.Add(argument.ToCSharpCode());
-                hasUnsafeArgument = hasUnsafeArgument || argument.IsUnsafe;
             }
 
             string bindingName;
@@ -926,7 +922,7 @@ namespace ExportCpp
                 bindingName = parent is null ? this.BindingName : $"{parent.BindingPrefix}_{this.BindingName}";
             }
 
-            return $"static internal extern {(hasUnsafeArgument ? "unsafe " : "")}{this.ReturnType.ToCSharpTypeString()} {bindingName}({string.Join(", ", arguments)});";
+            return $"static internal extern {this.ReturnType.ToCSharpTypeString()} {bindingName}({string.Join(", ", arguments)});";
         }
 
         public override string ToString()
@@ -948,8 +944,6 @@ namespace ExportCpp
 
         private string? mCSharpUnmanagedTypeString = null;
         public string CSharpUnmanagedTypeString => mCSharpUnmanagedTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# unmanaged type string, and {nameof(Declaration.Analyze)} has been invoked");
-
-        public override bool IsUnsafe => true;
 
         private CXType mCXType;
         public string FunctionTypeString => mCXType.PointeeType.Spelling.CString;
@@ -1103,8 +1097,6 @@ namespace ExportCpp
 
         private string? mCSharpUnmanagedTypeString = null;
         public string CSharpUnmanagedTypeString => mCSharpUnmanagedTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# unmanaged type string, and {nameof(Declaration.Analyze)} has been invoked");
-
-        public override bool IsUnsafe => this.CSharpTypeString.Contains('*') || this.CSharpTypeString.Contains("unmanaged");
 
         private Type? mExportAsType = null;
         public Type ExportAsType => mExportAsType ?? throw new InvalidOperationException($"Make sure this type has been marked as export, and {nameof(Declaration.Analyze)} has been invoked");
