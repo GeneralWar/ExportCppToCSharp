@@ -427,14 +427,21 @@ namespace ExportCpp
 
         private void analyzeCursor(CppContext context, CXCursor cursor)
         {
+#if DEBUG || DEVELOP
+            string filename = cursor.Location.GetFile().Name.CString;
+#endif
             string cursorName = cursor.GetName();
             if (ExportMacros.Contains(cursorName))
             {
                 return;
             }
 
-            if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind
-                || CXCursorKind.CXCursor_Destructor == cursor.kind)
+            if (CXCursorKind.CXCursor_Destructor == cursor.kind)
+            {
+                return;
+            }
+
+            if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind && CXTypeKind.CXType_Invalid == cursor.Type.kind)
             {
                 return;
             }
@@ -454,6 +461,11 @@ namespace ExportCpp
                 return;
             }
 
+            if (CXCursorKind.CXCursor_CXXMethod == cursor.kind && (!cursor.IsUserProvided || cursor.IsOverloadedOperator))
+            {
+                return;
+            }
+
             if (CXCursorKind.CXCursor_UsingDirective == cursor.kind)
             {
                 context.CurrentScope.AppendUsingNamespace(cursor);
@@ -463,6 +475,12 @@ namespace ExportCpp
 
             if (!this.checkExportMark(context, cursor))
             {
+                return;
+            }
+
+            if (cursor.IsAnonymousStructOrUnion)
+            {
+                this.analyzeChildCursors(context, cursor);
                 return;
             }
 
@@ -502,6 +520,11 @@ namespace ExportCpp
         private bool checkExportMark(CppContext context, CXCursor cursor)
         {
             if (CXCursorKind.CXCursor_Namespace == cursor.kind || CXCursorKind.CXCursor_EnumConstantDecl == cursor.kind)
+            {
+                return true;
+            }
+
+            if (/*CXCursorKind.CXCursor_FieldDecl == cursor.kind && */CXCursorKind.CXCursor_StructDecl == cursor.SemanticParent.kind)
             {
                 return true;
             }
@@ -572,6 +595,11 @@ namespace ExportCpp
 
         private void export(CppExportContext context, Declaration declaration)
         {
+            if (!declaration.ShouldExport)
+            {
+                return;
+            }
+
             Namespace? @namespace = declaration as Namespace;
             if (@namespace is not null)
             {
@@ -635,17 +663,10 @@ namespace ExportCpp
                 return;
             }
 
-            context.Writer.WriteLine();
             context.AppendDeclaration(declaration);
 
-            context.Writer.WriteLine(context.TabCount, declaration.MakeCppExportDeclaration());
-            context.Writer.WriteLine(context.TabCount, "{");
-            foreach (string content in declaration.MakeCppExportDefinition())
-            {
-                context.Writer.WriteLine(context.TabCount + 1, content);
-            }
-            context.Writer.WriteLine(context.TabCount, "}");
-
+            context.Writer.WriteLine();
+            declaration.MakeCppExportDefinition(context);
             ConsoleLogger.Log($"Export {declaration}");
         }
 
@@ -668,19 +689,29 @@ namespace ExportCpp
                     CSharpBindingContext context = new CSharpBindingContext(writer);
 
                     writer.WriteLine("using System.Runtime.InteropServices;");
-                    writer.WriteLine();
+
+                    this.bind(context, this.Global);
 
                     if (!string.IsNullOrWhiteSpace(this.BindingNamespace))
                     {
+                        writer.WriteLine();
                         writer.WriteLine(context.TabCount, $"namespace {this.BindingNamespace}");
-                        writer.WriteLine(context.TabCount, "{");
+                        writer.Write(context.TabCount, "{");
                         ++context.TabCount;
                     }
 
+                    writer.WriteLine();
                     writer.WriteLine(context.TabCount, $"static internal unsafe class {this.BindingClassname}");
                     writer.WriteLine(context.TabCount, "{");
 
-                    this.bind(context, this.Global);
+                    ++context.TabCount;
+                    writer.WriteLine(context.TabCount, $"private const string LIBRARY_NAME = \"{this.LibraryName}\";");
+
+                    foreach (Function function in context.ExportedFunctions)
+                    {
+                        this.bindFunction(context, function);
+                    }
+                    --context.TabCount;
 
                     while (context.TabCount >= 0)
                     {
@@ -692,6 +723,11 @@ namespace ExportCpp
 
         private void bind(CSharpBindingContext context, Declaration declaration)
         {
+            if (!declaration.ShouldExport)
+            {
+                return;
+            }
+
             Namespace? @namespace = declaration as Namespace;
             if (@namespace is not null)
             {
@@ -709,27 +745,21 @@ namespace ExportCpp
             Function? function = declaration as Function;
             if (function is not null)
             {
-                ++context.TabCount;
-                this.bindFunction(context, function);
-                --context.TabCount;
+                context.AppendFunction(function);
                 return;
             }
 
             Struct? @struct = declaration as Struct;
             if (@struct is not null)
             {
-                ++context.TabCount;
-                this.bindStruct(context, @struct);
-                --context.TabCount;
+                context.AppendStruct(@struct);
                 return;
             }
 
             Enum? @enum = declaration as Enum;
             if (@enum is not null)
             {
-                ++context.TabCount;
-                this.bindEnum(context, @enum);
-                --context.TabCount;
+                context.AppendEnum(@enum);
                 return;
             }
         }
@@ -744,7 +774,35 @@ namespace ExportCpp
 
         private void bindNamespace(CSharpBindingContext context, Namespace declaration)
         {
+            context.PushScope(declaration);
+
+            if (declaration.Global != declaration)
+            {
+                context.Writer.WriteLine();
+                context.WriteLine($"namespace {declaration.Name}");
+                context.Write("{");
+                ++context.TabCount;
+            }
+
             this.bindCollection(context, declaration);
+
+            foreach (Enum @enum in context.ExportedEnums)
+            {
+                this.bindEnum(context, @enum);
+            }
+
+            foreach (Struct @struct in context.ExportedStructs)
+            {
+                this.bindStruct(context, @struct);
+            }
+
+            if (declaration.Global != declaration)
+            {
+                --context.TabCount;
+                context.WriteLine("}");
+            }
+
+            context.PopScope(declaration);
         }
 
         private void bindClass(CSharpBindingContext context, Class declaration)
@@ -759,16 +817,23 @@ namespace ExportCpp
                 return;
             }
 
-            context.Writer.WriteLine();
-            context.Writer.WriteLine(context.TabCount, $"[DllImport(\"{this.LibraryName}\", CallingConvention = CallingConvention.Cdecl)]");
-            context.Writer.WriteLine(context.TabCount, declaration.MakeCSharpBindingDeclaration());
+            context.WriteLine();
+            context.WriteLine("[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]");
+            context.WriteLine(declaration.MakeCSharpBindingDeclaration());
 
             ConsoleLogger.Log($"Bind {declaration}");
         }
 
         private void bindStruct(CSharpBindingContext context, Struct declaration)
         {
-            this.bindCollection(context, declaration);
+            if (string.IsNullOrWhiteSpace(declaration.BindingName))
+            {
+                return;
+            }
+
+            context.Writer.WriteLine();
+            declaration.MakeCSharpDefinition(context);
+            ConsoleLogger.Log($"Bind {declaration}");
         }
 
         private void bindEnum(CSharpBindingContext context, Enum declaration)
@@ -778,17 +843,8 @@ namespace ExportCpp
                 return;
             }
 
-            context.Writer.WriteLine(context.TabCount, $"internal enum {declaration.BindingName}");
-            context.Writer.WriteLine(context.TabCount, "{");
-            foreach (Declaration child in declaration.Declarations)
-            {
-                EnumConstant? constant = child as EnumConstant;
-                if (constant is not null)
-                {
-                    context.Writer.WriteLine(context.TabCount + 1, constant.ToCSharpCode());
-                }
-            }
-            context.Writer.WriteLine(context.TabCount, "}");
+            context.WriteLine();
+            declaration.MakeCSharpDefinition(context);
 
             ConsoleLogger.Log($"Bind {declaration}");
         }
@@ -826,14 +882,24 @@ namespace ExportCpp
 
         static internal CXCursor CheckPreviousCursor(CXCursor cursor, CXFile expectedFile)
         {
-            int siblingIndex;
             CXCursor parent = cursor.SemanticParent;
+            int siblingIndex = cursor.GetSiblingIndex();
+            if (0 == siblingIndex)
+            {
+                return parent;
+            }
+
             CXCursor previousCursor = CXCursor.Null;
-            for (siblingIndex = cursor.GetSiblingIndex() - 1; siblingIndex > -1 && (!previousCursor.IsExposedDeclaration() || previousCursor.Location.GetFile() != expectedFile); --siblingIndex)
+            for (siblingIndex = siblingIndex - 1; siblingIndex > -1 && (!previousCursor.IsExposedDeclaration() || previousCursor.Location.GetFile() != expectedFile); --siblingIndex)
             {
                 previousCursor = parent.GetDecl((uint)siblingIndex);
             }
-            return siblingIndex > -1 ? previousCursor : parent;
+            if (previousCursor.IsUnexposed)
+            {
+                Tracer.Assert(-1 == siblingIndex);
+                return parent;
+            }
+            return previousCursor.IsInvalid ? parent : previousCursor;
         }
 
         static internal string CheckContentFromPreviousCursor(CppContext context, CXCursor cursor)
@@ -852,7 +918,7 @@ namespace ExportCpp
                 return content.Substring(0, content.Locate((int)line, (int)column));
             }
 
-            Tracer.Assert(file == cursor.Location.GetFile());
+            Tracer.Assert(file == cursor.Location.GetFile() && !previousCursor.IsUnexposed);
 
             cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
             int startIndex = content.Locate((int)line, (int)column);
@@ -867,6 +933,10 @@ namespace ExportCpp
             {
                 previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
                 previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
+            }
+            if (previousEndIndex == startIndex)// for nested anonymous struct or union
+            {
+                return CheckContentFromPreviousCursor(context, previousCursor);
             }
 
             return content.Substring(previousEndIndex, startIndex - previousEndIndex);

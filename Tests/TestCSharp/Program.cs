@@ -2,6 +2,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using TestCpp;
+using TestNamespace;
 
 namespace TestCSharp
 {
@@ -18,6 +19,12 @@ namespace TestCSharp
             Console.WriteLine(TestBindings.test_class_multiply(instance, 4));
 
             Console.WriteLine(TestBindings.derived_test_class_substract(instance, 4)); // we created a TestClass instance, not a DerivedTestClass instance, so it will return default value set by EXPORT_FUNCTION
+
+            TestStruct value = TestBindings.test_class_export_struct(instance);
+            Console.WriteLine($"{value.value1}, {value.value2}, {value.value3}");
+
+            TestClassValue* testValue = TestBindings.test_class_get_value_pointer(instance);
+            Console.WriteLine($"{testValue->previousValue}, {testValue->currentValue}");
 
             Console.ReadKey(true);
         }

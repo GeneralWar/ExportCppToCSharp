@@ -12,13 +12,24 @@ namespace ExportCpp
                 return "void";
             }
 
+            string content;
             CppType? cppType = type as CppType;
             if (cppType is not null)
             {
-                return cppType.ToCSharpTypeString();
+                content = cppType.ToCSharpTypeString().Trim();
             }
-
-            return type.ToShortString() ?? type.FullName ?? throw new InvalidOperationException();
+            else
+            {
+                content = type.ToShortString()?.Trim() ?? type.FullName ?? throw new InvalidOperationException();
+            }
+            if (type.IsPointer && (type.IsValueType/* || type.IsEnum*/))
+            {
+                if (!content.EndsWith("*"))
+                {
+                    content += "*";
+                }
+            }
+            return content.Replace("::", ".");
         }
 
         static public string ToCSharpUnmanagedTypeString(this Type type)

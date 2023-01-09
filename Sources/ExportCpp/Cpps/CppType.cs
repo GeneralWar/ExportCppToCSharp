@@ -14,36 +14,7 @@ namespace ExportCpp
 
         public override string? AssemblyQualifiedName => throw new NotImplementedException();
 
-        public override Type? BaseType
-        {
-            get
-            {
-                if (this.IsPointer)
-                {
-                    return null;
-                }
-
-                Class? @class = this.Declaration as Class;
-                if (@class is not null)
-                {
-                    return @class.ExportAsType == this ? typeof(object) : @class.ExportAsType;
-                }
-
-                Struct? @struct = this.Declaration as Struct;
-                if (@struct is not null)
-                {
-                    return typeof(ValueType);
-                }
-
-                Enum? @enum = this.Declaration as Enum;
-                if (@enum is not null)
-                {
-                    return typeof(System.Enum);
-                }
-
-                return null;
-            }
-        }
+        public override Type? BaseType => this.checkBaseType();
 
         public override string? FullName => this.IsPointer ? $"{this.Declaration.FullName}*" : this.Declaration.FullName;
 
@@ -59,6 +30,8 @@ namespace ExportCpp
 
         private bool mIsPointer = false;
         protected override bool IsPointerImpl() => mIsPointer;
+        protected override bool IsValueTypeImpl() => this.Declaration is Struct || this.Declaration is Enum;
+        public override bool IsEnum => this.Declaration is Enum;
 
         public CppType(ITypeDeclaration declaration) : this(declaration, false) { }
 
@@ -66,6 +39,34 @@ namespace ExportCpp
         {
             mIsPointer = isPointer;
             this.Declaration = declaration;
+        }
+
+        private Type? checkBaseType()
+        {
+            if (this.IsPointer)
+            {
+                return null;
+            }
+
+            Class? @class = this.Declaration as Class;
+            if (@class is not null)
+            {
+                return @class.ExportAsType == this ? typeof(object) : @class.ExportAsType;
+            }
+
+            Struct? @struct = this.Declaration as Struct;
+            if (@struct is not null)
+            {
+                return typeof(ValueType);
+            }
+
+            Enum? @enum = this.Declaration as Enum;
+            if (@enum is not null)
+            {
+                return typeof(System.Enum);
+            }
+
+            return null;
         }
 
         public override Type MakePointerType()

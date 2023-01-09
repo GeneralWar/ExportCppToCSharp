@@ -50,8 +50,11 @@ namespace ExportCpp
                 case CXCursorKind.CXCursor_StructDecl:
                 case CXCursorKind.CXCursor_EnumDecl:
                 case CXCursorKind.CXCursor_ClassTemplate:
+                case CXCursorKind.CXCursor_ParmDecl:
                     return instance.GetFullTypeName();
                 case CXCursorKind.CXCursor_CXXMethod:
+                case CXCursorKind.CXCursor_FieldDecl:
+                case CXCursorKind.CXCursor_UnexposedDecl:
                     Stack<string> names = new Stack<string>();
                     CXCursor cursor = instance;
                     while (!cursor.IsInvalid && !cursor.IsTranslationUnit)
@@ -133,6 +136,11 @@ namespace ExportCpp
                 return instance.PointeeType.IsConst();
             }
             return instance.IsConstQualified;
+        }
+
+        static public bool IsArray(this CXType instance)
+        {
+            return CXTypeKind.CXType_ConstantArray == instance.kind;
         }
 
         static public string GetOriginalTypeName(this CXType instance)
@@ -234,6 +242,14 @@ namespace ExportCpp
             uint line, column, offset;
             instance.GetFileLocation(out file, out line, out column, out offset);
             return file;
+        }
+
+        static public int GetOffset(this CXSourceLocation instance)
+        {
+            CXFile file;
+            uint line, column, offset;
+            instance.GetFileLocation(out file, out line, out column, out offset);
+            return (int)offset;
         }
     }
 }

@@ -1,4 +1,6 @@
 ﻿using ClangSharp.Interop;
+using General;
+using System.Text;
 
 namespace ExportCpp
 {
@@ -11,6 +13,11 @@ namespace ExportCpp
         {
             this.declaration = declaration;
             this.exception = exception;
+        }
+
+        public override string ToString()
+        {
+            return this.declaration.ToString();
         }
     }
 
@@ -126,20 +133,40 @@ namespace ExportCpp
         }
     }
 
-    internal class CppExportContext
+    internal class WriterContext
     {
-        public StreamWriter Writer { get; init; }
+        protected StreamWriter OriginalWriter { get; set; }
+        public StreamWriter Writer { get; protected set; }
+        public int TabCount { get; set; } = 0;
 
+        public WriterContext(StreamWriter writer)
+        {
+            this.OriginalWriter = this.Writer = writer;
+        }
+
+        public void Write(string content)
+        {
+            this.Writer.Write(this.TabCount, content);
+        }
+
+        public void WriteLine()
+        {
+            this.Writer.WriteLine();
+        }
+
+        public void WriteLine(string content)
+        {
+            this.Writer.WriteLine(this.TabCount, content);
+        }
+    }
+
+    internal class CppExportContext : WriterContext
+    {
         private List<Declaration> mDeclarations = new List<Declaration>();
         private HashSet<string> mFilenames = new HashSet<string>();
         public IEnumerable<string> Filenames => mFilenames;
 
-        public int TabCount { get; set; } = 0;
-
-        public CppExportContext(StreamWriter writer)
-        {
-            this.Writer = writer;
-        }
+        public CppExportContext(StreamWriter writer) : base(writer) { }
 
         public void AppendDeclaration(Declaration declaration)
         {
@@ -148,15 +175,110 @@ namespace ExportCpp
         }
     }
 
-    internal class CSharpBindingContext
+    internal class CSharpBindingContext : WriterContext
     {
-        public StreamWriter Writer { get; init; }
-
-        public int TabCount { get; set; } = 0;
-
-        public CSharpBindingContext(StreamWriter writer)
+        internal class BindingScope
         {
-            this.Writer = writer;
+            public Namespace Scope { get; }
+            public HashSet<Enum> Enums { get; }
+            public HashSet<Struct> Structs { get; }
+            internal int BoundDeclarations { get; set; }
+
+            private MemoryStream mStream = new MemoryStream();
+            public StreamWriter Writer { get; init; }
+            public string Content { get; private set; } = "";
+
+            public BindingScope(Namespace scope)
+            {
+                this.Scope = scope;
+                this.Enums = new HashSet<Enum>();
+                this.Structs = new HashSet<Struct>();
+                this.Writer = new StreamWriter(mStream, Encoding.UTF8, leaveOpen: true);
+            }
+
+            public void AppendEnum(Enum declaration)
+            {
+                this.Enums.Add(declaration);
+                this.updateBoundDeclarations();
+            }
+
+            public void AppendStruct(Struct declaration)
+            {
+                this.Structs.Add(declaration);
+                this.updateBoundDeclarations();
+            }
+
+            private void updateBoundDeclarations()
+            {
+                this.BoundDeclarations = this.Enums.Count + this.Structs.Count;
+            }
+
+            public void Close()
+            {
+                this.Writer.Close();
+                mStream.Close();
+                this.Content = Encoding.UTF8.GetString(mStream.ToArray());
+            }
+
+            public override string ToString() => this.Scope.ToString();
+        }
+
+
+        private Stack<BindingScope> mScopes = new Stack<BindingScope>();
+        public HashSet<Enum> ExportedEnums => mScopes.Peek().Enums;
+        public HashSet<Struct> ExportedStructs => mScopes.Peek().Structs;
+        public HashSet<Function> ExportedFunctions { get; }
+        public int CurrentExportedDeclarations => mScopes.Peek().BoundDeclarations;
+
+        public CSharpBindingContext(StreamWriter writer) : base(writer)
+        {
+            this.ExportedFunctions = new HashSet<Function>();
+        }
+
+        public void PushScope(Namespace scope)
+        {
+            BindingScope instance = new BindingScope(scope);
+            mScopes.Push(instance);
+            this.Writer = instance.Writer;
+        }
+
+        public void AppendEnum(Enum declaration)
+        {
+            mScopes.Peek().AppendEnum(declaration);
+        }
+
+        public void AppendStruct(Struct declaration)
+        {
+            mScopes.Peek().AppendStruct(declaration);
+        }
+
+        public void AppendFunction(Function declaration)
+        {
+            this.ExportedFunctions.Add(declaration);
+        }
+
+        public void PopScope(Namespace expectedScope)
+        {
+            BindingScope scope = mScopes.Pop();
+            Tracer.Assert(scope.Scope == expectedScope);
+
+            scope.Close();
+
+            if (mScopes.Count > 0)
+            {
+                BindingScope top = mScopes.Peek();
+                top.BoundDeclarations += scope.BoundDeclarations;
+                this.Writer = top.Writer;
+            }
+            else
+            {
+                this.Writer = this.OriginalWriter;
+            }
+
+            if (scope.BoundDeclarations > 0)
+            {
+                this.Write(scope.Content);
+            }
         }
     }
 }
