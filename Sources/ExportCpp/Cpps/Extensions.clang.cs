@@ -65,6 +65,13 @@ namespace ExportCpp
                     return string.Join(Namespace.SEPARATOR, names);
                 case CXCursorKind.CXCursor_Constructor:
                     return $"{instance.ThisObjectType.Spelling.CString}{Namespace.SEPARATOR}{instance.Name.CString}";
+                case CXCursorKind.CXCursor_TypedefDecl:
+                    if (CX_TypeClass.CX_TypeClass_FunctionProto == instance.Type.PointeeType.TypeClass)
+                    {
+                        return instance.Spelling.CString;
+                    }
+                    Debugger.Break();
+                    throw new NotImplementedException();
                 default:
                     Debugger.Break();
                     throw new NotImplementedException();

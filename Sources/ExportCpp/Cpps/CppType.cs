@@ -74,9 +74,14 @@ namespace ExportCpp
             return this.IsPointer ? this : new CppType(this.Declaration, true);
         }
 
-        public string ToCSharpTypeString()
+        public virtual string ToCSharpTypeString()
         {
             return this.Declaration.CSharpTypeString;
+        }
+
+        public virtual string MakeCSharpBindingArgumentTypeString()
+        {
+            return this.Declaration.ToCSharpBindingArgumentTypeString();
         }
 
         public virtual string ToCppTypeString()
@@ -324,6 +329,11 @@ namespace ExportCpp
         public override string MakeCppExportReturnValueString(string content)
         {
             return mTemplateDeclaration.ToCppExportReturnValueString(mTemplateArguments.ToArray(), content);
+        }
+
+        public override string MakeCSharpBindingArgumentTypeString()
+        {
+            return mTemplateDeclaration.ToCSharpBindingTypeString(mTemplateArguments.ToArray());
         }
 
         public override string ToCppTypeString()

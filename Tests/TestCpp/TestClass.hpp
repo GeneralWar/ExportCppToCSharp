@@ -4,8 +4,13 @@ namespace TestNamespace
 {
 	class TestClass;
 
+	struct TestBasicStruct
+	{
+		short int value0;
+	};
+
 	EXPORT_STRUCT(TestStruct);
-	struct TestStruct
+	struct TestStruct : public TestBasicStruct
 	{
 		int value1;
 		/// <summary>

@@ -32,6 +32,33 @@ namespace ExportCpp
             return content.Replace("::", ".");
         }
 
+        static public string ToCSharpBindingArgumentTypeString(this Type type)
+        {
+            if (typeof(void) == type)
+            {
+                return "void";
+            }
+
+            string content;
+            CppType? cppType = type as CppType;
+            if (cppType is not null)
+            {
+                content = cppType.MakeCSharpBindingArgumentTypeString().Trim();
+            }
+            else
+            {
+                content = type.ToShortString()?.Trim() ?? type.FullName ?? throw new InvalidOperationException();
+            }
+            if (type.IsPointer && (type.IsValueType/* || type.IsEnum*/))
+            {
+                if (!content.EndsWith("*"))
+                {
+                    content += "*";
+                }
+            }
+            return content.Replace("::", ".");
+        }
+
         static public string ToCSharpUnmanagedTypeString(this Type type)
         {
             CppType? cppType = type as CppType;

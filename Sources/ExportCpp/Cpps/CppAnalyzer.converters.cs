@@ -59,6 +59,12 @@ namespace ExportCpp
             /// <para>例如，'AssetType'是包含C++特性的enum class类型，需要通过'static_cast&lt;int&gt;(value)'来转换为C兼容的int类型</para>
             /// </summary>
             string MakeCppExportReturnValueString(Type type, string content);
+
+            /// <summary>
+            /// 将C++类型转换为C#类型
+            /// <para>例如，将'unsigned int'转换为'uint'</para>
+            /// </summary>
+            string MakeCSharpBindingArgumentTypeString(Type type);
         }
 
         /// <summary>
@@ -117,6 +123,12 @@ namespace ExportCpp
             /// <para>又函数调用返回的std::string是临时变量，std::string::c_str()返回的'char*'也是临时变量，因此需要通过类似'copy_string'创建一个副本</para>
             /// </summary>
             string MakeCppExportReturnValueString(ClassTemplate declaration, Type[] arguments, string content);
+
+            /// <summary>
+            /// 将C++类型转换为C#类型
+            /// <para>例如，将'std::string'转换为'string'</para>
+            /// </summary>
+            string MakeCSharpBindingArgumentTypeString(ClassTemplate declaration, Type[] arguments);
         }
 
         public interface IConstructorConverter
@@ -171,6 +183,12 @@ namespace ExportCpp
         {
             ITypeConverter? converter;
             return mTypeConverters.TryGetValue(type.FullName ?? type.Name, out converter) ? converter.MakeCppExportReturnValueString(type, content) : null;
+        }
+
+        public string? MakeCSharpBindingArgumentTypeString(Type type)
+        {
+            ITypeConverter? converter;
+            return mTypeConverters.TryGetValue(type.FullName ?? type.Name, out converter) ? converter.MakeCSharpBindingArgumentTypeString(type) : null;
         }
 
         public void RegisterTemplateTypeConverter(string cppFuleTypeName, ITemplateTypeConverter converter)
@@ -251,6 +269,18 @@ namespace ExportCpp
             }
 
             return converter.MakeCppExportReturnValueString(declaration, arguments, content);
+        }
+
+        public string? MakeCSharpBindingArgumentTypeString(ClassTemplate declaration, Type[] arguments)
+        {
+            ITemplateTypeConverter? converter;
+            if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
+            {
+                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                return null;
+            }
+
+            return converter.MakeCSharpBindingArgumentTypeString(declaration, arguments);
         }
 
         public void RegisterConstructorConverter(IConstructorConverter converter)

@@ -22,6 +22,11 @@ namespace TestNamespace
 		}
 	}
 
+	void TestClass::SetValue(const unsigned int& value)
+	{
+		this->SetValue(static_cast<int>(value));
+	}
+
 	int TestClass::GetValue()
 	{
 		return mValue.currentValue;

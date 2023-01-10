@@ -14,7 +14,13 @@ extern "C"
 		instance->SetValueChangeCallback(callback);
 	}
 
-	__declspec (dllexport) void test_class_set_value_uint(TestNamespace::TestClass* instance, int value)
+	__declspec (dllexport) void test_class_set_value(TestNamespace::TestClass* instance, int value)
+	{
+		if (!instance) return;
+		instance->SetValue(value);
+	}
+
+	__declspec (dllexport) void test_class_set_value_uint(TestNamespace::TestClass* instance, unsigned int value)
 	{
 		if (!instance) return;
 		instance->SetValue(value);

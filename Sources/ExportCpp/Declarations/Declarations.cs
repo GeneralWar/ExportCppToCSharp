@@ -1,10 +1,8 @@
 ﻿using ClangSharp.Interop;
 using General;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Xml;
-using System.Xml.Linq;
 using Type = System.Type;
 
 namespace ExportCpp
@@ -46,6 +44,8 @@ namespace ExportCpp
         string? ToCppExportInvocationCastString(string content);
         string ToCppExportReturnTypeString();
         string ToCppExportReturnValueString(string content);
+
+        string ToCSharpBindingArgumentTypeString();
     }
 
     public interface ITemplateTypeDeclaration : ITypeDeclaration
@@ -56,6 +56,8 @@ namespace ExportCpp
         string? ToCppExportInvocationCastString(Type[] arguments, string content);
         string ToCppExportReturnTypeString(Type[] arguments);
         string ToCppExportReturnValueString(Type[] arguments, string content);
+
+        string ToCSharpBindingTypeString(Type[] arguments);
     }
 
     public abstract class Declaration
@@ -738,7 +740,22 @@ namespace ExportCpp
 
         public override string ToCSharpCode()
         {
-            return $"{this.Type.DeclaredType.ToCSharpTypeString()} {Declaration.CheckValidCSharpVariableName(this.Name)}";
+            return $"{this.Type.DeclaredType.ToCSharpBindingArgumentTypeString()} {Declaration.CheckValidCSharpVariableName(this.Name)}";
+        }
+
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(this.Type, this.Name);
+        }
+
+        public override bool Equals(object? obj)
+        {
+            Argument? other = obj as Argument;
+            if (other is null)
+            {
+                return false;
+            }
+            return this.Name == other.Name && this.Type == other.Type;
         }
 
         public override string ToString()
@@ -757,43 +774,96 @@ namespace ExportCpp
 
         static public readonly Regex ExportExpression = new Regex($@"{CppAnalyzer.ExportFunctionMacro}\((.*)\)\s*;");
 
+        protected class FunctionOverload
+        {
+            public CXCursor MethodCursor { get; init; }
+            public bool IsStatic => this.MethodCursor.IsStatic;
+
+            private Type? mReturnType = null;
+            public Type ReturnType => mReturnType ?? throw new InvalidOperationException($"Make sure there is a valid return type, and {nameof(Declaration.Analyze)} has been invoked");
+
+            public Argument[] Arguments { get; protected set; } = new Argument[0];
+
+            public string[] ExportContents { get; init; }
+            public string? BindingName => this.ExportContents.Length > INDEX_EXPORT_NAME ? this.ExportContents[INDEX_EXPORT_NAME] : null;
+            public string? DefaultReturnValue => this.ExportContents.Length > INDEX_EXPORT_DEFAULT_VALUE ? this.ExportContents[INDEX_EXPORT_DEFAULT_VALUE] : null;
+
+            public FunctionOverload(CXCursor cursor, string[] exportContents)
+            {
+                this.MethodCursor = FunctionOverload.CheckMethodCursor(cursor);
+                this.ExportContents = exportContents;
+            }
+
+            static private CXCursor CheckMethodCursor(CXCursor cursor)
+            {
+                if (CXCursorKind.CXCursor_CXXMethod == cursor.kind || CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_TypedefDecl == cursor.kind)
+                {
+                    return cursor;
+                }
+
+                if (CXCursorKind.CXCursor_OverloadedDeclRef == cursor.Definition.kind)
+                {
+                    Tracer.Assert(1 == cursor.Definition.NumOverloadedDecls);
+                    return cursor.Definition.GetOverloadedDecl(0);
+                }
+
+                throw new NotImplementedException();
+            }
+
+            public void Analyze(CppContext context, Func<CppContext, FunctionOverload, Type> checkReturnType, Func<Argument[]> checkArguments)
+            {
+                mReturnType = checkReturnType.Invoke(context, this);
+                this.Arguments = checkArguments.Invoke();
+            }
+
+            public override int GetHashCode()
+            {
+                return HashCode.Combine(this.MethodCursor.GetFullName(), this.MethodCursor.Mangling.CString);
+            }
+
+            public override bool Equals(object? obj)
+            {
+                FunctionOverload? other = obj as FunctionOverload;
+                if (other is null)
+                {
+                    return false;
+                }
+
+                if (this.MethodCursor.Mangling.CString != other.MethodCursor.Mangling.CString || this.Arguments.Length != other.Arguments.Length)
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < this.Arguments.Length; ++i)
+                {
+                    if (this.Arguments[i] != other.Arguments[i])
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
+            public override string ToString()
+            {
+                return this.MethodCursor.Mangling.CString;
+            }
+        }
+
         public override string? ExportMacro => CppAnalyzer.ExportFunctionMacro;
 
-        public CXCursor MethodCursor { get; init; }
-        public bool IsStatic => this.MethodCursor.IsStatic;
-
-        private Type? mReturnType = null;
-        public Type ReturnType => mReturnType ?? throw new InvalidOperationException($"Make sure there is a valid return type, and {nameof(Declaration.Analyze)} has been invoked");
-
-        public string? BindingName => this.ExportContents.Length > INDEX_EXPORT_NAME ? this.ExportContents[INDEX_EXPORT_NAME] : null;
-        public string? DefaultReturnValue => this.ExportContents.Length > INDEX_EXPORT_DEFAULT_VALUE ? this.ExportContents[INDEX_EXPORT_DEFAULT_VALUE] : null;
-
-        public Argument[] Arguments { get; protected set; } = new Argument[0];
+        protected HashSet<FunctionOverload> mMethodOverloads = new HashSet<FunctionOverload>();
+        public override bool ShouldExport => mMethodOverloads.Any(o => !string.IsNullOrWhiteSpace(o.BindingName));
 
         public Function(CppContext context, CXCursor cursor) : base(context, cursor)
         {
-            this.MethodCursor = this.checkMethodCursor();
+            mMethodOverloads.Add(new FunctionOverload(cursor, this.ExportContents));
         }
 
-        private CXCursor checkMethodCursor()
+        protected virtual Type checkReturnType(CppContext context, FunctionOverload overload)
         {
-            if (CXCursorKind.CXCursor_CXXMethod == this.Cursor.kind || CXCursorKind.CXCursor_Constructor == this.Cursor.kind || CXCursorKind.CXCursor_TypedefDecl == this.Cursor.kind)
-            {
-                return this.Cursor;
-            }
-
-            if (CXCursorKind.CXCursor_OverloadedDeclRef == this.Cursor.Definition.kind)
-            {
-                Tracer.Assert(1 == this.Cursor.Definition.NumOverloadedDecls);
-                return this.Cursor.Definition.GetOverloadedDecl(0);
-            }
-
-            throw new NotImplementedException();
-        }
-
-        protected virtual Type checkReturnType(CppContext context)
-        {
-            CXType returnType = this.MethodCursor.ReturnType;
+            CXType returnType = overload.MethodCursor.ReturnType;
             return this.FindType(context, returnType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.ReturnType.GetOriginalTypeName()}");
         }
 
@@ -803,57 +873,75 @@ namespace ExportCpp
         {
             base.internalAnalyze(context);
 
-            mReturnType = this.checkReturnType(context);
-
-            List<Argument> arguments = new List<Argument>();
-            for (uint i = 0; i < this.MethodCursor.NumArguments; ++i)
+            foreach (FunctionOverload overload in mMethodOverloads)
             {
-                Argument argument = new Argument(context, this.MethodCursor.GetArgument(i));
-                argument.Analyze(context);
-                arguments.Add(argument);
+                List<Argument> arguments = new List<Argument>();
+                for (uint i = 0; i < overload.MethodCursor.NumArguments; ++i)
+                {
+                    Argument argument = new Argument(context, overload.MethodCursor.GetArgument(i));
+                    argument.Analyze(context);
+                    arguments.Add(argument);
+                }
+                overload.Analyze(context, this.checkReturnType, () => arguments.ToArray());
             }
-            this.Arguments = arguments.ToArray();
+        }
+
+        protected override void internalMerge(Declaration other)
+        {
+            base.internalMerge(other);
+
+            Function? function = other as Function;
+            if (function is not null)
+            {
+                mMethodOverloads.AddRange(function.mMethodOverloads);
+            }
         }
 
         protected override void makeXml(XmlElement element)
         {
-            element.SetAttribute(nameof(ReturnType), this.ReturnType?.FullName);
-            element.SetAttribute(nameof(BindingName), this.BindingName);
-
-            foreach (Argument argument in this.Arguments)
+            element.SetAttribute(nameof(this.Name), this.Name);
+            foreach (FunctionOverload record in mMethodOverloads)
             {
-                element.AppendChild(argument.ToXml(element.OwnerDocument));
+                XmlElement xmlRecord = element.OwnerDocument.CreateElement("Overload");
+                xmlRecord.SetAttribute(nameof(FunctionOverload.BindingName), record.BindingName);
+                xmlRecord.SetAttribute(nameof(record.ReturnType), record.ReturnType?.FullName);
+                foreach (Argument argument in record.Arguments)
+                {
+                    xmlRecord.AppendChild(argument.ToXml(element.OwnerDocument));
+                }
+
+                element.AppendChild(xmlRecord);
             }
         }
 
-        protected virtual string makeCppExportDeclaration()
+        protected virtual string makeCppExportDeclaration(FunctionOverload overload)
         {
-            Type returnType = this.checkCppExportReturnType();
-            string exportName = this.checkCppExportFunctionName();
-            List<string> arguments = this.checkCppExportArguments();
+            Type returnType = this.checkCppExportReturnType(overload);
+            string exportName = this.checkCppExportFunctionName(overload);
+            List<string> arguments = this.checkCppExportArguments(overload);
             string prefix = "__declspec (dllexport)";
             string returnTypeString = returnType.MakeCppExportReturnTypeString().Trim();
-            if (this.MethodCursor.ReturnType.IsConst() && !returnTypeString.StartsWith("const"))
+            if (overload.MethodCursor.ReturnType.IsConst() && !returnTypeString.StartsWith("const"))
             {
                 prefix += " const";
             }
             return $"{prefix} {returnTypeString} {exportName}({string.Join(", ", arguments)})";
         }
 
-        protected virtual Type checkCppExportReturnType() => this.ReturnType;
+        protected virtual Type checkCppExportReturnType(FunctionOverload overload) => overload.ReturnType;
 
-        protected virtual string checkCppExportFunctionName()
+        protected virtual string checkCppExportFunctionName(FunctionOverload overload)
         {
             Class? parent = this.Parent as Class;
             return parent is null
-                ? (this.BindingName ?? throw new InvalidOperationException("This function might not be marked as an exported function"))
-                : $"{parent.BindingPrefix}_{this.BindingName}";
+                ? (overload.BindingName ?? throw new InvalidOperationException("This function might not be marked as an exported function"))
+                : $"{parent.BindingPrefix}_{overload.BindingName}";
         }
 
-        protected virtual List<string> checkCppExportArguments()
+        protected virtual List<string> checkCppExportArguments(FunctionOverload overload)
         {
-            List<string> arguments = this.Arguments.Select(a => a.ToCppExportArgumentCode()).ToList();
-            if (!this.IsStatic)
+            List<string> arguments = overload.Arguments.Select(a => a.ToCppExportArgumentCode()).ToList();
+            if (!overload.IsStatic)
             {
                 arguments.Insert(0, $"{(this.Parent as Class ?? throw new InvalidOperationException()).ExportAsType?.MakePointerType().ToCppTypeString()} {VARIABLE_NAME_INSTANCE}");
             }
@@ -862,25 +950,30 @@ namespace ExportCpp
 
         public void MakeCppExportDefinition(CppExportContext context)
         {
-            context.WriteLine(this.makeCppExportDeclaration());
-            context.WriteLine("{");
-            ++context.TabCount;
+            foreach (FunctionOverload overload in mMethodOverloads)
+            {
+                context.WriteLine();
 
-            this.makeCppExportDefinition(context);
+                context.WriteLine(this.makeCppExportDeclaration(overload));
+                context.WriteLine("{");
+                ++context.TabCount;
 
-            --context.TabCount;
-            context.WriteLine("}");
+                this.makeCppExportDefinition(context, overload);
+
+                --context.TabCount;
+                context.WriteLine("}");
+            }
         }
 
-        protected virtual void makeCppExportDefinition(CppExportContext context)
+        protected virtual void makeCppExportDefinition(CppExportContext context, FunctionOverload overload)
         {
             Class? parent = this.Parent as Class;
             Type? type = parent?.Type.DeclaredType;
-            Type returnType = this.ReturnType;
+            Type returnType = overload.ReturnType;
             string instanceName = VARIABLE_NAME_INSTANCE;
 
-            string returnContent = typeof(void) == returnType ? "return" : $"return {this.DefaultReturnValue ?? throw new InvalidOperationException()}";
-            if (!this.IsStatic)
+            string returnContent = typeof(void) == returnType ? "return" : $"return {overload.DefaultReturnValue ?? throw new InvalidOperationException()}";
+            if (!overload.IsStatic)
             {
                 context.WriteLine($"if (!{instanceName}) {returnContent};");
 
@@ -903,7 +996,7 @@ namespace ExportCpp
             }
 
             List<string> arguments = new List<string>();
-            foreach (Argument argument in this.Arguments)
+            foreach (Argument argument in overload.Arguments)
             {
                 string? castCode = argument.MakeDynamicCastCode();
                 if (!string.IsNullOrWhiteSpace(castCode))
@@ -916,43 +1009,52 @@ namespace ExportCpp
             }
 
             string argumentContents = string.Join(", ", arguments);
-            string execution = this.IsStatic ? $"{type?.ToCppTypeString()}::{this.Name}({argumentContents})" : $"{instanceName}->{this.Name}({argumentContents})";
+            string execution = overload.IsStatic ? $"{type?.ToCppTypeString()}::{this.Name}({argumentContents})" : $"{instanceName}->{this.Name}({argumentContents})";
             string content = returnType.MakeCppExportReturnValueString(execution);
             context.WriteLine(typeof(void) == returnType ? content + ";" : $"return {content};");
         }
 
-        public string MakeCSharpBindingDeclaration()
+        public void MakeCSharpBindingDeclaration(CSharpBindingContext context)
         {
-            if (string.IsNullOrWhiteSpace(this.BindingName))
+            foreach (FunctionOverload overload in mMethodOverloads)
             {
-                throw new InvalidOperationException("Function has no export or binding flag");
-            }
+                context.WriteLine();
+                context.WriteLine("[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]");
 
-            List<string> arguments = new List<string>();
-            foreach (Argument argument in this.Arguments)
-            {
-                arguments.Add(argument.ToCSharpCode());
-            }
+                if (string.IsNullOrWhiteSpace(overload.BindingName))
+                {
+                    throw new InvalidOperationException("Function has no export or binding flag");
+                }
 
-            string bindingName;
-            Class? parent = this.Parent as Class;
-            if (this is Constructor)
-            {
-                bindingName = this.BindingName;
-            }
-            else
-            {
-                arguments.Insert(0, $"{typeof(IntPtr).ToCSharpTypeString()} instance");
-                bindingName = parent is null ? this.BindingName : $"{parent.BindingPrefix}_{this.BindingName}";
-            }
+                List<string> arguments = new List<string>();
+                foreach (Argument argument in overload.Arguments)
+                {
+                    arguments.Add(argument.ToCSharpCode());
+                }
 
-            string returnTypeString = this.ReturnType.ToCSharpTypeString();
-            return $"static internal extern {returnTypeString} {bindingName}({string.Join(", ", arguments)});";
+                string bindingName;
+                Class? parent = this.Parent as Class;
+                if (this is Constructor)
+                {
+                    bindingName = overload.BindingName;
+                }
+                else
+                {
+                    if (!overload.IsStatic)
+                    {
+                        arguments.Insert(0, $"{typeof(IntPtr).ToCSharpTypeString()} instance");
+                    }
+                    bindingName = parent is null ? overload.BindingName : $"{parent.BindingPrefix}_{overload.BindingName}";
+                }
+
+                string returnTypeString = overload.ReturnType.ToCSharpTypeString();
+                context.WriteLine($"static internal extern {returnTypeString} {bindingName}({string.Join(", ", arguments)});");
+            }
         }
 
         public override string ToString()
         {
-            return $"{base.ToString()}, return: {mReturnType?.FullName}";
+            return $"{base.ToString()}, overloads: {mMethodOverloads.Count}";
         }
     }
 
@@ -986,21 +1088,24 @@ namespace ExportCpp
             }
         }
 
-        protected override Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.Type.PointeeType.ResultType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.Type.PointeeType.ResultType.GetOriginalTypeName()}");
+        protected override Type checkReturnType(CppContext context, FunctionOverload overload) => this.FindType(context, this.Cursor.Type.PointeeType.ResultType) ?? throw new InvalidOperationException($"There is no type {this.Cursor.Type.PointeeType.ResultType.GetOriginalTypeName()}");
 
         internal override void internalAnalyze(CppContext context)
         {
             base.internalAnalyze(context);
 
+            Tracer.Assert(1 == mMethodOverloads.Count);
+            FunctionOverload overload = mMethodOverloads.First();
+
+            List<Argument> arguments = new List<Argument>();
             CXType pointeeType = this.Cursor.Type.PointeeType;
             int argumentCount = pointeeType.NumArgTypes;
-            string csharpTypeString = $"delegate* unmanaged[Cdecl]<{this.ReturnType.ToUnmanagedString()}>";
+            string csharpTypeString = $"delegate* unmanaged[Cdecl]<{overload.ReturnType.ToUnmanagedString()}>";
             if (argumentCount > 0)
             {
                 string[] argumentContents = CppAnalyzer.SplitArguments(this.Content.Substring(this.Content.IndexOf(')') + 1).Trim());
                 Tracer.Assert(argumentContents.Length == argumentCount);
 
-                List<Argument> arguments = new List<Argument>();
                 List<string> unmanagedArguments = new List<string>();
                 for (uint i = 0; i < pointeeType.NumArgTypes; ++i)
                 {
@@ -1009,10 +1114,11 @@ namespace ExportCpp
                     unmanagedArguments.Add(argument.CSharpUnmanagedTypeString);
                     arguments.Add(argument);
                 }
-                this.Arguments = arguments.ToArray();
 
-                csharpTypeString = $"delegate* unmanaged[Cdecl]<{string.Join(", ", unmanagedArguments)}, {this.ReturnType.ToUnmanagedString()}>";
+                csharpTypeString = $"delegate* unmanaged[Cdecl]<{string.Join(", ", unmanagedArguments)}, {overload.ReturnType.ToUnmanagedString()}>";
             }
+
+            overload.Analyze(context, this.checkReturnType, () => arguments.ToArray());
 
             mCSharpTypeString = mCSharpUnmanagedTypeString = csharpTypeString;
             mType = new DeclarationType(mCXType, new CppType(this));
@@ -1053,6 +1159,11 @@ namespace ExportCpp
         {
             return content;
         }
+
+        public string ToCSharpBindingArgumentTypeString()
+        {
+            return this.CSharpTypeString;
+        }
     }
 
     internal class Constructor : Function
@@ -1063,27 +1174,27 @@ namespace ExportCpp
 
         public Constructor(CppContext context, CXCursor cursor) : base(context, cursor) { }
 
-        protected override Type checkReturnType(CppContext context) => this.FindType(context, this.Cursor.SemanticParent.GetFullTypeName()) ?? throw new InvalidOperationException($"There is no type {this.Cursor.SemanticParent.GetFullTypeName()}");
+        protected override Type checkReturnType(CppContext context, FunctionOverload overload) => this.FindType(context, this.Cursor.SemanticParent.GetFullTypeName()) ?? throw new InvalidOperationException($"There is no type {this.Cursor.SemanticParent.GetFullTypeName()}");
 
-        protected override Type checkCppExportReturnType() => this.ReturnType.MakePointerType();
+        protected override Type checkCppExportReturnType(FunctionOverload overload) => overload.ReturnType.MakePointerType();
 
-        protected override string checkCppExportFunctionName() => this.BindingName ?? throw new InvalidOperationException("This function might not be marked as an exported function");
+        protected override string checkCppExportFunctionName(FunctionOverload overload) => overload.BindingName ?? throw new InvalidOperationException("This function might not be marked as an exported function");
 
-        protected override List<string> checkCppExportArguments() => this.Arguments.Select(a => a.ToCppCode()).ToList();
+        protected override List<string> checkCppExportArguments(FunctionOverload overload) => overload.Arguments.Select(a => a.ToCppCode()).ToList();
 
-        protected override string makeCppExportDeclaration()
+        protected override string makeCppExportDeclaration(FunctionOverload overload)
         {
-            Type returnType = this.checkCppExportReturnType();
-            string exportName = this.checkCppExportFunctionName();
-            List<string> arguments = this.checkCppExportArguments();
+            Type returnType = this.checkCppExportReturnType(overload);
+            string exportName = this.checkCppExportFunctionName(overload);
+            List<string> arguments = this.checkCppExportArguments(overload);
             string returnTypeString = this.Analyzer.MakeConstructorCppExportReturnTypeString(returnType) ?? returnType.MakeCppExportReturnTypeString();
             return $"__declspec (dllexport) {returnTypeString} {exportName}({string.Join(", ", arguments)})";
         }
 
-        protected override void makeCppExportDefinition(CppExportContext context)
+        protected override void makeCppExportDefinition(CppExportContext context, FunctionOverload overload)
         {
             List<string> arguments = new List<string>();
-            foreach (Argument argument in this.Arguments)
+            foreach (Argument argument in overload.Arguments)
             {
                 string? castCode = argument.MakeDynamicCastCode();
                 if (!string.IsNullOrWhiteSpace(castCode))
@@ -1095,7 +1206,7 @@ namespace ExportCpp
                 arguments.Add(argument.ToCppInvocationCode());
             }
 
-            string content = this.Analyzer.MakeConstructorCppExportReturnValueString(this.ReturnType, arguments.ToArray()) ?? $"new {this.ReturnType.FullName}({string.Join(", ", arguments)})";
+            string content = this.Analyzer.MakeConstructorCppExportReturnValueString(overload.ReturnType, arguments.ToArray()) ?? $"new {overload.ReturnType.FullName}({string.Join(", ", arguments)})";
             context.WriteLine($"return {content};");
         }
 
@@ -1259,6 +1370,11 @@ namespace ExportCpp
             }
             return content;
         }
+
+        public string ToCSharpBindingArgumentTypeString()
+        {
+            return this.Analyzer.MakeCSharpBindingArgumentTypeString(this.Type.DeclaredType) ?? this.CSharpTypeString;
+        }
     }
 
     public class ClassTemplate : Class, ITemplateTypeDeclaration
@@ -1327,6 +1443,11 @@ namespace ExportCpp
         {
             return this.Analyzer.MakeCppExportReturnValueString(this, arguments, content) ?? content;
         }
+
+        public string ToCSharpBindingTypeString(Type[] arguments)
+        {
+            return this.Analyzer.MakeCSharpBindingArgumentTypeString(this, arguments) ?? this.CSharpTypeString;
+        }
     }
 
     internal class Struct : DeclarationCollection, ITypeDeclaration
@@ -1361,6 +1482,19 @@ namespace ExportCpp
         internal override void internalAnalyze(CppContext context)
         {
             base.internalAnalyze(context);
+
+            int baseCount = this.Cursor.NumBases;
+            for (uint baseIndex = 0; baseIndex < baseCount; ++baseIndex)
+            {
+                CXCursor baseCursor = this.Cursor.GetBase(baseIndex).Definition;
+                int fieldCount = baseCursor.NumFields;
+                for (uint fieldIndex = 0; fieldIndex < fieldCount; ++fieldIndex)
+                {
+                    CXCursor fieldCursor = baseCursor.GetField(fieldIndex);
+                    string fieldFullName = fieldCursor.GetFullName();
+                    this.AddDeclaration(context.GetDeclaration(fieldFullName) ?? throw new InvalidOperationException());
+                }
+            }
 
             mCSharpTypeString = mCSharpUnmanagedTypeString = this.BindingName.Contains(".") ? this.BindingName : this.FullName;
             mType = new DeclarationType(mCXType, new CppType(this));
@@ -1406,6 +1540,11 @@ namespace ExportCpp
             return this.Analyzer.MakeCppExportReturnValueString(this.Type.DeclaredType, content) ?? content;
         }
 
+        public string ToCSharpBindingArgumentTypeString()
+        {
+            return this.CSharpTypeString;
+        }
+
         /*private bool checkSequential(List<Field> fields)
         {
             if (fields.Count <= 1)
@@ -1431,6 +1570,7 @@ namespace ExportCpp
             base.internalMakeCSharpDefinition(context);
 
             List<Field> fields = this.Declarations.Select(d => d as Field).Where(d => d is not null).Cast<Field>().ToList();
+            fields.Sort((f1, f2) => f1.OffsetInBits - f2.OffsetInBits);
             //if (this.checkSequential(fields))
             //{
             //    this.makeCSharpSequentialDefinition(context, fields);
@@ -1605,6 +1745,11 @@ namespace ExportCpp
         public string ToCppExportReturnValueString(string content)
         {
             return this.Analyzer.MakeCppExportReturnValueString(this.Type.DeclaredType, content) ?? content;
+        }
+
+        public string ToCSharpBindingArgumentTypeString()
+        {
+            return this.CSharpTypeString;
         }
 
         internal override void internalMakeCSharpDefinition(CSharpBindingContext context)

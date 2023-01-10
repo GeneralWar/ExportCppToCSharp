@@ -49,6 +49,9 @@ namespace ExportCpp
 
         public Global Global { get; init; }
 
+        private Dictionary<string, Declaration> mDeclarations = new Dictionary<string, Declaration>();
+        public IEnumerable<Declaration> Declarations => mDeclarations.Values;
+
         public CppAnalyzer(string solutionFilename, string projectFilename, string exportFilename, string bindingFilename, string libraryName, string bindingClassname)
         {
             this.SolutionFilename = Path.GetFullPath(solutionFilename).MakeStandardPath();
@@ -69,6 +72,18 @@ namespace ExportCpp
         public void SetBindingNamespace(string? bindingNamespace)
         {
             this.BindingNamespace = bindingNamespace;
+        }
+
+        public void AppendDeclaration(Declaration declaration)
+        {
+            mDeclarations.Add(declaration.FullName, declaration);
+        }
+
+        public Declaration? GetDeclaration(string fullname)
+        {
+            Declaration? declaration;
+            mDeclarations.TryGetValue(fullname, out declaration);
+            return declaration;
         }
 
         private void printVersion()
@@ -500,6 +515,20 @@ namespace ExportCpp
                 record.Merge(declaration);
             }
 
+            if (CXCursorKind.CXCursor_StructDecl == cursor.kind)
+            {
+                int baseCount = cursor.NumBases;
+                for (uint baseIndex = 0; baseIndex < baseCount; ++baseIndex)
+                {
+                    CXCursor baseCursor = cursor.GetBase(baseIndex).Definition;
+                    int fieldCount = baseCursor.NumFields;
+                    for (uint fieldIndex = 0; fieldIndex < fieldCount; ++fieldIndex)
+                    {
+                        this.analyzeCursor(context, baseCursor.GetField(fieldIndex));
+                    }
+                }
+            }
+
             if (cursor.NumDecls > 0 && declaration is DeclarationCollection)
             {
                 context.PushScope(declaration as DeclarationCollection ?? throw new InvalidOperationException("Only collection can be scope"));
@@ -658,14 +687,13 @@ namespace ExportCpp
 
         private void exportFunction(CppExportContext context, Function declaration)
         {
-            if (string.IsNullOrWhiteSpace(declaration.BindingName))
+            if (!declaration.ShouldExport)
             {
                 return;
             }
 
             context.AppendDeclaration(declaration);
 
-            context.Writer.WriteLine();
             declaration.MakeCppExportDefinition(context);
             ConsoleLogger.Log($"Export {declaration}");
         }
@@ -701,7 +729,7 @@ namespace ExportCpp
                     }
 
                     writer.WriteLine();
-                    writer.WriteLine(context.TabCount, $"static internal unsafe class {this.BindingClassname}");
+                    writer.WriteLine(context.TabCount, $"static internal unsafe partial class {this.BindingClassname}");
                     writer.WriteLine(context.TabCount, "{");
 
                     ++context.TabCount;
@@ -812,14 +840,12 @@ namespace ExportCpp
 
         private void bindFunction(CSharpBindingContext context, Function declaration)
         {
-            if (string.IsNullOrWhiteSpace(declaration.BindingName))
+            if (!declaration.ShouldExport)
             {
                 return;
             }
 
-            context.WriteLine();
-            context.WriteLine("[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]");
-            context.WriteLine(declaration.MakeCSharpBindingDeclaration());
+            declaration.MakeCSharpBindingDeclaration(context);
 
             ConsoleLogger.Log($"Bind {declaration}");
         }

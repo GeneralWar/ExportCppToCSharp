@@ -33,22 +33,13 @@ namespace ExportCpp
         private Stack<DeclarationCollection> mScopes = new Stack<DeclarationCollection>();
         public DeclarationCollection CurrentScope => mScopes.Count > 0 ? mScopes.Peek() : this.Global;
 
-        private Dictionary<string, Declaration> mDeclarations = new Dictionary<string, Declaration>();
-        public IEnumerable<Declaration> Declarations => mDeclarations.Values;
-
         private List<Declaration> mExports = new List<Declaration>();
         public IEnumerable<Declaration> Exports => mExports;
 
         private List<FailedDeclaration> mFailedDeclarations = new List<FailedDeclaration>();
         public IEnumerable<FailedDeclaration> FailedDeclarations => mFailedDeclarations;
 
-        public CppContext(string filename, CppAnalyzer analyzer) : this(filename, File.Exists(filename) ? File.ReadAllText(filename) : "", analyzer)
-        {
-            foreach (Declaration declaration in analyzer.Global.Declarations)
-            {
-                mDeclarations.Add(declaration.FullName, declaration);
-            }
-        }
+        public CppContext(string filename, CppAnalyzer analyzer) : this(filename, File.Exists(filename) ? File.ReadAllText(filename) : "", analyzer) { }
 
         internal CppContext(string filename, string fileContent, CppAnalyzer analyzer)
         {
@@ -66,7 +57,7 @@ namespace ExportCpp
 
         public void AppendDeclaration(Declaration declaration)
         {
-            mDeclarations.Add(declaration.FullName, declaration);
+            this.Analyzer.AppendDeclaration(declaration);
 
             if (!string.IsNullOrWhiteSpace(declaration.ExportContent))
             {
@@ -91,13 +82,13 @@ namespace ExportCpp
 
         public Declaration? GetDeclaration(string fullname)
         {
-            Declaration? declaration;
-            if (!mDeclarations.TryGetValue(fullname, out declaration))
+            Declaration? declaration = this.Analyzer.GetDeclaration(fullname);
+            if (declaration is null)
             {
                 string[] parts = fullname.Split(Namespace.SEPARATOR);
                 if (parts.Length > 1)
                 {
-                    mDeclarations.TryGetValue(parts[0], out declaration);
+                    declaration = this.Analyzer.GetDeclaration(parts[0]);
                     for (int i = 1; i < parts.Length && declaration is not null; ++i)
                     {
                         declaration = (declaration as DeclarationCollection)?.GetDeclaration(parts[i]);
