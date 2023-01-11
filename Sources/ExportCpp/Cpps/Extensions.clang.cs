@@ -1,8 +1,10 @@
 ﻿using ClangSharp.Interop;
+using System.Diagnostics;
+using Type = System.Type;
 
 namespace ExportCpp
 {
-    static internal partial class Extensions
+    static public partial class Extensions
     {
         static public string GetName(this CXCursor instance)
         {
@@ -11,6 +13,10 @@ namespace ExportCpp
 
         static public string GetFullTypeName(this CXCursor instance)
         {
+            if (CXCursorKind.CXCursor_ClassTemplate == instance.kind)
+            {
+                return $"{instance.GetFullNamespace()}{Namespace.SEPARATOR}{instance.Spelling.CString}";
+            }
             return instance.Type.GetFullTypeName();
         }
 
@@ -26,7 +32,50 @@ namespace ExportCpp
                 }
                 cursor = cursor.SemanticParent;
             }
-            return string.Join("::", names);
+            return string.Join(Namespace.SEPARATOR, names);
+        }
+
+        static public string GetFullName(this CXCursor instance)
+        {
+            if (instance.IsInvalid)
+            {
+                return "";
+            }
+
+            switch (instance.kind)
+            {
+                case CXCursorKind.CXCursor_Namespace:
+                    return instance.GetFullNamespace();
+                case CXCursorKind.CXCursor_ClassDecl:
+                case CXCursorKind.CXCursor_StructDecl:
+                case CXCursorKind.CXCursor_EnumDecl:
+                case CXCursorKind.CXCursor_ClassTemplate:
+                case CXCursorKind.CXCursor_ParmDecl:
+                    return instance.GetFullTypeName();
+                case CXCursorKind.CXCursor_CXXMethod:
+                case CXCursorKind.CXCursor_FieldDecl:
+                case CXCursorKind.CXCursor_UnexposedDecl:
+                    Stack<string> names = new Stack<string>();
+                    CXCursor cursor = instance;
+                    while (!cursor.IsInvalid && !cursor.IsTranslationUnit)
+                    {
+                        names.Push(cursor.GetName());
+                        cursor = cursor.SemanticParent;
+                    }
+                    return string.Join(Namespace.SEPARATOR, names);
+                case CXCursorKind.CXCursor_Constructor:
+                    return $"{instance.ThisObjectType.Spelling.CString}{Namespace.SEPARATOR}{instance.Name.CString}";
+                case CXCursorKind.CXCursor_TypedefDecl:
+                    if (CX_TypeClass.CX_TypeClass_FunctionProto == instance.Type.PointeeType.TypeClass)
+                    {
+                        return instance.Spelling.CString;
+                    }
+                    Debugger.Break();
+                    throw new NotImplementedException();
+                default:
+                    Debugger.Break();
+                    throw new NotImplementedException();
+            }
         }
 
         static public bool IsTypeDeclaration(this CXCursor instance)
@@ -80,7 +129,25 @@ namespace ExportCpp
 
         static public string GetFullTypeName(this CXType instance)
         {
+            if (CXTypeKind.CXType_Typedef == instance.kind)
+            {
+                return instance.Spelling.CString;
+            }
             return instance.Desugar.Spelling.CString;
+        }
+
+        static public bool IsConst(this CXType instance)
+        {
+            if (CXTypeKind.CXType_Pointer == instance.kind || CXTypeKind.CXType_LValueReference == instance.kind || CXTypeKind.CXType_RValueReference == instance.kind)
+            {
+                return instance.PointeeType.IsConst();
+            }
+            return instance.IsConstQualified;
+        }
+
+        static public bool IsArray(this CXType instance)
+        {
+            return CXTypeKind.CXType_ConstantArray == instance.kind;
         }
 
         static public string GetOriginalTypeName(this CXType instance)
@@ -111,6 +178,22 @@ namespace ExportCpp
             return name;
         }
 
+        static public string GetTemplateName(this CXType instance)
+        {
+            switch (instance.TypeClass)
+            {
+                case CX_TypeClass.CX_TypeClass_TemplateSpecialization:
+                    return instance.TemplateName.AsTemplateDecl.GetFullTypeName();
+                case CX_TypeClass.CX_TypeClass_Record:
+                case CX_TypeClass.CX_TypeClass_Elaborated:
+                case CX_TypeClass.CX_TypeClass_SubstTemplateTypeParm:
+                    return instance.CanonicalType.Declaration.SpecializedCursorTemplate.GetFullTypeName();
+                default:
+                    Debugger.Break();
+                    throw new NotImplementedException();
+            }
+        }
+
         static public Type ToBuiltinType(this CXType instance)
         {
             switch (instance.kind)
@@ -118,7 +201,7 @@ namespace ExportCpp
                 case CXTypeKind.CXType_Void: return typeof(void);
                 case CXTypeKind.CXType_Bool: return typeof(bool);
                 //case CXTypeKind.CXType_Char_U = 4,
-                //case CXTypeKind.CXType_UChar = 5,
+                case CXTypeKind.CXType_UChar: return typeof(byte);
                 //case CXTypeKind.CXType_Char16 = 6,
                 //case CXTypeKind.CXType_Char32 = 7,
                 case CXTypeKind.CXType_UShort: return typeof(ushort);
@@ -126,7 +209,7 @@ namespace ExportCpp
                 case CXTypeKind.CXType_ULong: return typeof(uint);
                 case CXTypeKind.CXType_ULongLong: return typeof(ulong);
                 //case CXTypeKind.CXType_UInt128: return typeof(ulong);
-                //case CXTypeKind.CXType_Char_S: return typeof(uint);
+                case CXTypeKind.CXType_Char_S: return typeof(sbyte);
                 //case CXTypeKind.CXType_SChar: return typeof(uint);
                 //case CXTypeKind.CXType_WChar: return typeof(uint);
                 case CXTypeKind.CXType_Short: return typeof(short);
@@ -154,7 +237,9 @@ namespace ExportCpp
                 //case CXTypeKind.CXType_ULongAccum = 38,
                 //case CXTypeKind.CXType_BFloat16 = 39,
                 //case CXTypeKind.CXType_Ibm128 = 40,
-                default: throw new InvalidOperationException();
+                default:
+                    Debugger.Break();
+                    throw new InvalidOperationException();
             }
         }
 
@@ -164,6 +249,14 @@ namespace ExportCpp
             uint line, column, offset;
             instance.GetFileLocation(out file, out line, out column, out offset);
             return file;
+        }
+
+        static public int GetOffset(this CXSourceLocation instance)
+        {
+            CXFile file;
+            uint line, column, offset;
+            instance.GetFileLocation(out file, out line, out column, out offset);
+            return (int)offset;
         }
     }
 }

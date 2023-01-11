@@ -1,42 +1,86 @@
 <Export>
   <Namespace Name="TestNamespace" FullName="TestNamespace">
+    <Struct Name="TestStruct" FullName="TestNamespace::TestStruct">
+      <Field Name="value1" Type="System.Int32" />
+      <Field Name="value2" Type="System.Int64" />
+      <Field Name="value3" Type="System.Double" />
+      <Field Name="value0" Type="System.Int16" />
+    </Struct>
+    <Field Name="value0" Type="System.Int16" />
+    <Struct Name="TestStruct1" FullName="TestNamespace::TestStruct1">
+      <Field Name="value1" Type="System.Int32" />
+      <Field Name="value2" Type="System.Int64" />
+      <Field Name="value3" Type="System.Double" />
+    </Struct>
+    <Struct Name="TestStruct2" FullName="TestNamespace::TestStruct2">
+      <Field Name="value1" Type="System.Int32" />
+      <Field Name="value2" Type="System.Int64" />
+      <Field Name="value3" Type="System.Double" />
+    </Struct>
     <Enum Name="TestEnumClass" FullName="TestNamespace::TestEnumClass">
       <EnumConstant Name="Enum1" Value="0" />
       <EnumConstant Name="Enum2" Value="1" />
       <EnumConstant Name="Enum3" Value="2" />
     </Enum>
+    <Struct Name="TestClassValue" FullName="TestNamespace::TestClassValue">
+      <Field Name="previousValue" Type="System.Int32" />
+      <Field Name="currentValue" Type="System.Int32" />
+    </Struct>
     <Class Name="TestClass" FullName="TestNamespace::TestClass" BindingPrefix="test_class">
-      <FunctionPointer Name="ValueChange" ReturnType="System.Void" BindingName="">
-        <Argument Name="instance" CppType="TestNamespace::TestClass" Decorations="Pointer" />
-        <Argument Name="value" CppType="System.Int32" />
-      </FunctionPointer>
-      <Constructor Name="TestClass" ReturnType="TestNamespace::TestClass" BindingName="create_test_class">
-        <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+      <Constructor Name="TestClass">
+        <Overload BindingName="create_test_class" ReturnType="TestNamespace::TestClass">
+          <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+        </Overload>
       </Constructor>
-      <Function Name="SetValueChangeCallback" ReturnType="System.Void" BindingName="set_value_change_callback">
-        <Argument Name="callback" CppType="TestNamespace::TestClass::ValueChange" />
+      <Function Name="SetValueChangeCallback">
+        <Overload BindingName="set_value_change_callback" ReturnType="System.Void">
+          <Argument Name="callback" CppType="TestNamespace::TestClass::ValueChange" />
+        </Overload>
       </Function>
-      <Function Name="SetValue" ReturnType="System.Void" BindingName="set_value">
-        <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+      <Function Name="SetValue">
+        <Overload BindingName="set_value" ReturnType="System.Void">
+          <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+        </Overload>
+        <Overload BindingName="set_value_uint" ReturnType="System.Void">
+          <Argument Name="value" CppType="System.UInt32" Decorations="LValueReference" />
+        </Overload>
       </Function>
-      <Function Name="GetValue" ReturnType="System.Int32" BindingName="get_value" />
-      <Function Name="Add" ReturnType="System.Int32" BindingName="add">
-        <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+      <Function Name="GetValue">
+        <Overload BindingName="get_value" ReturnType="System.Int32" />
       </Function>
-      <Function Name="Multiply" ReturnType="System.Int32" BindingName="multiply">
-        <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+      <Function Name="GetValuePointer">
+        <Overload BindingName="get_value_pointer" ReturnType="TestNamespace::TestClassValue*" />
+      </Function>
+      <Function Name="Add">
+        <Overload BindingName="add" ReturnType="System.Int32">
+          <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+        </Overload>
+      </Function>
+      <Function Name="Multiply">
+        <Overload BindingName="multiply" ReturnType="System.Int32">
+          <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+        </Overload>
+      </Function>
+      <Function Name="ExportStruct">
+        <Overload BindingName="export_struct" ReturnType="TestNamespace::TestStruct" />
       </Function>
     </Class>
     <Class Name="DerivedTestClass" FullName="TestNamespace::DerivedTestClass" BindingPrefix="derived_test_class">
-      <Constructor Name="DerivedTestClass" ReturnType="TestNamespace::DerivedTestClass" BindingName="create_derived_test_class">
-        <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+      <Constructor Name="DerivedTestClass">
+        <Overload BindingName="create_derived_test_class" ReturnType="TestNamespace::DerivedTestClass">
+          <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+        </Overload>
       </Constructor>
-      <Function Name="Substract" ReturnType="System.Int32" BindingName="substract">
-        <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+      <Function Name="Substract">
+        <Overload BindingName="substract" ReturnType="System.Int32">
+          <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
+        </Overload>
       </Function>
     </Class>
   </Namespace>
   <Namespace Name="TestNamespace1" FullName="TestNamespace1">
-    <Struct Name="TestStruct1" FullName="TestNamespace1::TestStruct1" />
+    <Struct Name="TestStruct1" FullName="TestNamespace1::TestStruct1">
+      <Field Name="value" Type="System.Int32" />
+    </Struct>
   </Namespace>
 </Export>

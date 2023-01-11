@@ -8,10 +8,11 @@
         <BaseOutputPath>$(SolutionDir)Output</BaseOutputPath>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
         <Configurations>Debug;Release;Develop</Configurations>
+        <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
     </PropertyGroup>
 	
 	<ItemGroup Condition="'$(Configuration)'=='Develop'">
-		<ProjectReference Include="..\..\..\..\General\General.CSharp\General\General.csproj" />
+		<ProjectReference Include="..\..\..\..\..\Library\General.CSharp\General\General.csproj" />
 	</ItemGroup>
 	
 	<ItemGroup Condition="'$(Configuration)'=='Debug' OR '$(Configuration)'=='Release'">
@@ -22,6 +23,7 @@
 	
 	<ItemGroup>
 	  <PackageReference Include="ClangSharp" Version="15.0.2" />
+	  <PackageReference Include="libclang.runtime.win-x64" Version="15.0.0" />
 	  <PackageReference Include="libClangSharp" Version="15.0.0" />
 	</ItemGroup>
 </Project>

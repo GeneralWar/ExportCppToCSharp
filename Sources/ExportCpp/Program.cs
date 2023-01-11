@@ -75,7 +75,7 @@ namespace ExportCpp
             }
 
             CppAnalyzer analyzer = new CppAnalyzer(Path.GetFullPath(solutionFilename), Path.GetFullPath(projectFilename), Path.GetFullPath(exportFilename), Path.GetFullPath(bindingFilename), libraryName, bindingClassname);
-            analyzer.SetNamespace(commandLine.GetString(ARGUMENT_BINDING_NAMESPACE));
+            analyzer.SetBindingNamespace(commandLine.GetString(ARGUMENT_BINDING_NAMESPACE));
             analyzer.IncludeDirectories.AddRange(commandLine.GetStringArray(ARGUMENT_INCLUDE_DIRECTORY).Select(d => PathUtility.MakeDirectoryStandard(d)));
             analyzer.IncludeHeaderFiles.AddRange(commandLine.GetStringArray(ARGUMENT_INCLUDE_HEADER_FILE));
             analyzer.DefineMacros.AddRange(commandLine.GetStringArray(ARGUMENT_DEFINE));

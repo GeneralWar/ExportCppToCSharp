@@ -7,7 +7,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ExportCpp", "ExportCpp\Expo
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TestCpp", "..\Tests\TestCpp\TestCpp.vcxproj", "{D52D936E-29C3-43F7-8C2F-D0B0661D7992}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "General", "..\..\..\General\General.CSharp\General\General.csproj", "{CE2396FA-E216-43B7-8CC7-B84BD8E5D4DD}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "General", "..\..\..\..\Library\General.CSharp\General\General.csproj", "{CE2396FA-E216-43B7-8CC7-B84BD8E5D4DD}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "TestCSharp", "..\Tests\TestCSharp\TestCSharp.csproj", "{B26A167D-C326-448B-9476-C8937DF198FE}"
 	ProjectSection(ProjectDependencies) = postProject
