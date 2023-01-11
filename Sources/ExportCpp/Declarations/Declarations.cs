@@ -1681,6 +1681,7 @@ namespace ExportCpp
         public override string? ExportMacro => CppAnalyzer.ExportEnumMacro;
 
         public string BindingName { get; init; }
+        public override bool ShouldExport => !this.BindingName.Contains(".");
 
         public string[] Values { get; private set; } = new string[0];
 
