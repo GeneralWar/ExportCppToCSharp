@@ -122,6 +122,9 @@ Target: x86_64-pc-windows-msvc
 Thread model: posix
 ```
 
-***It only works on clang version 15.x***
+## Caution
+
+- It only works on clang version 15.x
+- You should copy libClangSharp.dll to output directory manually
 
 ## Suggestions welcome
