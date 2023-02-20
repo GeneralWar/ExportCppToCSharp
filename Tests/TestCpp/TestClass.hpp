@@ -103,6 +103,9 @@ namespace TestNamespace
 
 		EXPORT_FUNCTION(export_struct, { });
 		TestStruct ExportStruct() const;
+
+		EXPORT_FUNCTION(export_struct_pointer, nullptr);
+		TestStruct* ExportStructPointer() const;
 	};
 
 	EXPORT_CLASS(TestClass, derived_test_class);

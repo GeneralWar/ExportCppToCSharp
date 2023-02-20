@@ -56,6 +56,12 @@ extern "C"
 		return instance->ExportStruct();
 	}
 
+	__declspec (dllexport) TestNamespace::TestStruct* test_class_export_struct_pointer(TestNamespace::TestClass* instance)
+	{
+		if (!instance) return nullptr;
+		return instance->ExportStructPointer();
+	}
+
 	__declspec (dllexport) TestNamespace::DerivedTestClass* create_derived_test_class(int value)
 	{
 		return new TestNamespace::DerivedTestClass(value);

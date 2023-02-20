@@ -461,10 +461,10 @@ namespace ExportCpp
                 return;
             }
 
-            if (cursor.IsTypeDeclaration() && cursor.Definition.IsInvalid)
-            {
-                return;
-            }
+            //if (cursor.IsTypeDeclaration() && cursor.Definition.IsInvalid) // might skip forward declaration, so comment this
+            //{
+            //    return;
+            //}
 
             if ((CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_CXXMethod == cursor.kind) && !cursor.IsUserProvided) // only user provided methods and constructors can be exported
             {

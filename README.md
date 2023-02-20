@@ -125,6 +125,6 @@ Thread model: posix
 ## Caution
 
 - It only works on clang version 15.x
-- You should copy libClangSharp.dll to output directory manually
+- You should copy libClangSharp.dll to output directory manually ([link](https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders))
 
 ## Suggestions welcome
