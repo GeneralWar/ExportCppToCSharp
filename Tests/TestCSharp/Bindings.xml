@@ -64,6 +64,9 @@
       <Function Name="ExportStruct">
         <Overload BindingName="export_struct" ReturnType="TestNamespace::TestStruct" />
       </Function>
+      <Function Name="ExportStructPointer">
+        <Overload BindingName="export_struct_pointer" ReturnType="TestNamespace::TestStruct*" />
+      </Function>
     </Class>
     <Class Name="DerivedTestClass" FullName="TestNamespace::DerivedTestClass" BindingPrefix="derived_test_class">
       <Constructor Name="DerivedTestClass">

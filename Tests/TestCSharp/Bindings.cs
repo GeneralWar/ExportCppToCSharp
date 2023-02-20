@@ -104,6 +104,9 @@ namespace TestCpp
 		static internal extern TestNamespace.TestStruct test_class_export_struct(System.IntPtr instance);
 
 		[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]
+		static internal extern TestNamespace.TestStruct* test_class_export_struct_pointer(System.IntPtr instance);
+
+		[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]
 		static internal extern System.IntPtr create_derived_test_class(int value);
 
 		[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]

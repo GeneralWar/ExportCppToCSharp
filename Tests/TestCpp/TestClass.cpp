@@ -56,6 +56,11 @@ namespace TestNamespace
 		return value;
 	}
 
+	TestStruct* TestClass::ExportStructPointer() const
+	{
+		return nullptr;
+	}
+
 	DerivedTestClass::DerivedTestClass(const int& value) : TestClass(value) { }
 
 	DerivedTestClass::~DerivedTestClass() { }
