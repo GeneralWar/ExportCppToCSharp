@@ -30,6 +30,8 @@ namespace TestCSharp
             Console.WriteLine($"{testValue->previousValue}, {testValue->currentValue}");
 
             Console.ReadKey(true);
+
+            TestBindings.delete_TestNamespace_TestClass(instance);
         }
 
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]

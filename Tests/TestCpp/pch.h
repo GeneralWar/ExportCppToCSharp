@@ -12,6 +12,10 @@
 #define EXPORT_CONSTRUCTOR(name) // export cpp construction as #name
 #endif
 
+#ifndef EXPORT_DESTRUCTOR
+#define EXPORT_DESTRUCTOR // export cpp destruction as destroy_#classname
+#endif
+
 #ifndef EXPORT_FUNCTION
 #define EXPORT_FUNCTION(name, default_return) // export cpp function as #name
 #endif
