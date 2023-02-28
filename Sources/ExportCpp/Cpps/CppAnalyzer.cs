@@ -10,6 +10,7 @@ namespace ExportCpp
     {
         static internal string ExportClassMacro { get; private set; } = "EXPORT_CLASS";
         static internal string ExportConstructorMacro { get; private set; } = "EXPORT_CONSTRUCTOR";
+        static internal string ExportDestructorMacro { get; private set; } = "EXPORT_DESTRUCTOR";
         static internal string ExportFunctionMacro { get; private set; } = "EXPORT_FUNCTION";
         static internal string ExportFunctionPointerMacro { get; private set; } = "EXPORT_FUNCTION_POINTER";
 
@@ -19,7 +20,7 @@ namespace ExportCpp
         static internal string ExportEnumMacro { get; private set; } = "EXPORT_ENUM";
         static internal string ExportEnumValueMacro { get; private set; } = "EXPORT_ENUM_VALUE";
 
-        static internal string[] ExportMacros => new[] { ExportClassMacro, ExportConstructorMacro, ExportFunctionMacro, ExportFunctionPointerMacro, ExportStructMacro, ExportFieldMacro, ExportEnumMacro, ExportEnumValueMacro };
+        static internal string[] ExportMacros => new[] { ExportClassMacro, ExportConstructorMacro, ExportDestructorMacro, ExportFunctionMacro, ExportFunctionPointerMacro, ExportStructMacro, ExportFieldMacro, ExportEnumMacro, ExportEnumValueMacro };
 
 
         private const string PLACE_HOLDER_INCLUDES = "{PLACE_HOLDER_INCLUDES}";
@@ -451,11 +452,6 @@ namespace ExportCpp
                 return;
             }
 
-            if (CXCursorKind.CXCursor_Destructor == cursor.kind)
-            {
-                return;
-            }
-
             if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind && CXTypeKind.CXType_Invalid == cursor.Type.kind)
             {
                 return;
@@ -466,7 +462,7 @@ namespace ExportCpp
             //    return;
             //}
 
-            if ((CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_CXXMethod == cursor.kind) && !cursor.IsUserProvided) // only user provided methods and constructors can be exported
+            if ((CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_Destructor == cursor.kind || CXCursorKind.CXCursor_CXXMethod == cursor.kind) && !cursor.IsUserProvided) // only user provided methods and constructors can be exported
             {
                 return;
             }

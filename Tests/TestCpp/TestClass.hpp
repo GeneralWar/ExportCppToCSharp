@@ -79,6 +79,7 @@ namespace TestNamespace
 	public:
 		EXPORT_CONSTRUCTOR(create_test_class);
 		TestClass(const int& value);
+		EXPORT_DESTRUCTOR;
 		virtual ~TestClass();
 
 		EXPORT_FUNCTION(set_value_change_callback, 0);

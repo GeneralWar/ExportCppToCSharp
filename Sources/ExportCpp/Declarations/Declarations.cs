@@ -407,6 +407,7 @@ namespace ExportCpp
                 case CXCursorKind.CXCursor_ClassDecl: return new Class(context, cursor);
                 case CXCursorKind.CXCursor_ClassTemplate: return new ClassTemplate(context, cursor);
                 case CXCursorKind.CXCursor_Constructor: return new Constructor(context, cursor);
+                case CXCursorKind.CXCursor_Destructor: return new Destructor(context, cursor);
                 case CXCursorKind.CXCursor_FunctionDecl:
                 case CXCursorKind.CXCursor_CXXMethod:
                     return new Function(context, cursor);
@@ -796,7 +797,7 @@ namespace ExportCpp
 
             static private CXCursor CheckMethodCursor(CXCursor cursor)
             {
-                if (CXCursorKind.CXCursor_CXXMethod == cursor.kind || CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_TypedefDecl == cursor.kind)
+                if (CXCursorKind.CXCursor_CXXMethod == cursor.kind || CXCursorKind.CXCursor_Constructor == cursor.kind || CXCursorKind.CXCursor_TypedefDecl == cursor.kind || CXCursorKind.CXCursor_Destructor == cursor.kind)
                 {
                     return cursor;
                 }
@@ -1014,7 +1015,7 @@ namespace ExportCpp
             context.WriteLine(typeof(void) == returnType ? content + ";" : $"return {content};");
         }
 
-        public void MakeCSharpBindingDeclaration(CSharpBindingContext context)
+        public virtual void MakeCSharpBindingDeclaration(CSharpBindingContext context)
         {
             foreach (FunctionOverload overload in mMethodOverloads)
             {
@@ -1168,8 +1169,6 @@ namespace ExportCpp
 
     internal class Constructor : Function
     {
-        static public readonly Regex ExportConstructorExpression = new Regex($@"{CppAnalyzer.ExportConstructorMacro}\((.*)\)\s*;");
-
         public override string? ExportMacro => CppAnalyzer.ExportConstructorMacro;
 
         public Constructor(CppContext context, CXCursor cursor) : base(context, cursor) { }
@@ -1208,6 +1207,59 @@ namespace ExportCpp
 
             string content = this.Analyzer.MakeConstructorCppExportReturnValueString(overload.ReturnType, arguments.ToArray()) ?? $"new {overload.ReturnType.FullName}({string.Join(", ", arguments)})";
             context.WriteLine($"return {content};");
+        }
+
+        public override string ToString()
+        {
+            return $"{this.GetType().Name} {this.Name}";
+        }
+    }
+
+    internal class Destructor : Function
+    {
+        public override string? ExportMacro => CppAnalyzer.ExportDestructorMacro;
+        public override bool ShouldExport => true;
+
+        public Destructor(CppContext context, CXCursor cursor) : base(context, cursor) { }
+
+        protected override Type checkReturnType(CppContext context, FunctionOverload overload) => this.FindType(context, this.Cursor.SemanticParent.GetFullTypeName()) ?? throw new InvalidOperationException($"There is no type {this.Cursor.SemanticParent.GetFullTypeName()}");
+
+        protected override Type checkCppExportReturnType(FunctionOverload overload) => overload.ReturnType.MakePointerType();
+
+        protected override string checkCppExportFunctionName(FunctionOverload overload)
+        {
+            Type returnType = this.checkCppExportReturnType(overload);
+            string content = $"delete_{this.Analyzer.MakeConstructorCppExportReturnTypeString(returnType) ?? returnType.MakeCppExportReturnTypeString()}";
+            return content.Replace("::", "_").Replace("*", "");
+        }
+
+        protected override List<string> checkCppExportArguments(FunctionOverload overload) => overload.Arguments.Select(a => a.ToCppCode()).ToList();
+
+        protected override string makeCppExportDeclaration(FunctionOverload overload)
+        {
+            Type returnType = this.checkCppExportReturnType(overload);
+            string exportName = this.checkCppExportFunctionName(overload);
+            string returnTypeString = this.Analyzer.MakeConstructorCppExportReturnTypeString(returnType) ?? returnType.MakeCppExportReturnTypeString();
+            return $"__declspec (dllexport) void {exportName}({returnTypeString} instance)";
+        }
+
+        protected override void makeCppExportDefinition(CppExportContext context, FunctionOverload overload)
+        {
+            context.WriteLine($"if (!instance) return;");
+            context.WriteLine($"delete instance;");
+        }
+
+        public override void MakeCSharpBindingDeclaration(CSharpBindingContext context)
+        {
+
+            context.WriteLine();
+            context.WriteLine("[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]");
+
+            FunctionOverload overload = mMethodOverloads.First();
+            string exportName = this.checkCppExportFunctionName(overload);
+            Type type = this.checkCppExportReturnType(overload);
+            string typeString = type.ToCSharpTypeString();
+            context.WriteLine($"static internal extern void {exportName}({typeString} instance);");
         }
 
         public override string ToString()

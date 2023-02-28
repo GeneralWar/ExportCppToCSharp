@@ -32,6 +32,9 @@
           <Argument Name="value" CppType="System.Int32" Decorations="LValueReference" />
         </Overload>
       </Constructor>
+      <Destructor Name="~TestClass">
+        <Overload BindingName="" ReturnType="TestNamespace::TestClass" />
+      </Destructor>
       <Function Name="SetValueChangeCallback">
         <Overload BindingName="set_value_change_callback" ReturnType="System.Void">
           <Argument Name="callback" CppType="TestNamespace::TestClass::ValueChange" />

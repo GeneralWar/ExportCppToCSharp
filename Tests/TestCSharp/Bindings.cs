@@ -80,6 +80,9 @@ namespace TestCpp
 		static internal extern System.IntPtr create_test_class(int value);
 
 		[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]
+		static internal extern void delete_TestNamespace_TestClass(System.IntPtr instance);
+
+		[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]
 		static internal extern void test_class_set_value_change_callback(System.IntPtr instance, delegate* unmanaged[Cdecl]<nint, int, void> callback);
 
 		[DllImport(LIBRARY_NAME, CallingConvention = CallingConvention.Cdecl)]
