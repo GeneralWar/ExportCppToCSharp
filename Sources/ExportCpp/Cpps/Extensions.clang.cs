@@ -151,6 +151,15 @@ namespace ExportCpp
             return CXTypeKind.CXType_ConstantArray == instance.kind;
         }
 
+        static public CXType GetOriginalType(this CXType instance)
+        {
+            if (CXTypeKind.CXType_Pointer == instance.kind || CXTypeKind.CXType_LValueReference == instance.kind || CXTypeKind.CXType_RValueReference == instance.kind)
+            {
+                return instance.PointeeType;
+            }
+            return instance;
+        }
+
         static public string GetOriginalTypeName(this CXType instance)
         {
             if (CXTypeKind.CXType_Invalid != instance.PointeeType.kind)
