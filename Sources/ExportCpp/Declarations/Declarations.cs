@@ -1353,6 +1353,11 @@ namespace ExportCpp
             return this.Name == name || this.FullName.EndsWith($"::{name}");
         }
 
+        public bool IsSubclassOf(Class maybeBaseClass)
+        {
+            return this.Type.DeclaredType.IsSubclassOf(maybeBaseClass.Type.DeclaredType);
+        }
+
         protected override void makeXml(XmlElement element)
         {
             element.SetAttribute(nameof(FullName), this.FullName);
