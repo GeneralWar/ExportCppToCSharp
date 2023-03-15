@@ -156,6 +156,7 @@ namespace ExportCpp
         private List<Declaration> mDeclarations = new List<Declaration>();
         private HashSet<string> mFilenames = new HashSet<string>();
         public IEnumerable<string> Filenames => mFilenames;
+        public IEnumerable<Declaration> Declarations => mDeclarations;
 
         public CppExportContext(StreamWriter writer) : base(writer) { }
 

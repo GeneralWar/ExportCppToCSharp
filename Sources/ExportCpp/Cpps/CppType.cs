@@ -276,19 +276,19 @@ namespace ExportCpp
 
         private CXType mTemplateType;
 
-        private List<Type> mTemplateArguments;
-        public override Type[] GenericTypeArguments => mTemplateArguments.ToArray();
+        private List<DeclarationType> mTemplateArguments;
+        public override Type[] GenericTypeArguments => mTemplateArguments.Select(d => d.DeclaredType).ToArray();
 
         public override bool IsGenericType => true;
 
-        public CppTemplateType(ITemplateTypeDeclaration declaration, CXType templateType, IEnumerable<Type> templateArguments) : this(declaration, templateType, templateArguments, false) { }
+        public CppTemplateType(ITemplateTypeDeclaration declaration, CXType templateType, IEnumerable<DeclarationType> templateArguments) : this(declaration, templateType, templateArguments, false) { }
 
-        private CppTemplateType(ITemplateTypeDeclaration declaration, CXType templateType, IEnumerable<Type> templateArguments, bool isPointer) : base(declaration, isPointer)
+        private CppTemplateType(ITemplateTypeDeclaration declaration, CXType templateType, IEnumerable<DeclarationType> templateArguments, bool isPointer) : base(declaration, isPointer)
         {
             mTemplateDeclaration = declaration;
 
             mTemplateType = templateType;
-            mTemplateArguments = new List<Type>(templateArguments);
+            mTemplateArguments = new List<DeclarationType>(templateArguments);
         }
 
         public override Type MakePointerType()
@@ -298,7 +298,7 @@ namespace ExportCpp
 
         public string[] CheckTemplateInvocationArgumentTypes()
         {
-            return mTemplateArguments.Select(t => t.ToCppTypeString()).ToArray();
+            return mTemplateArguments.Select(t => t.DeclaredType.ToCppTypeString()).ToArray();
         }
 
         public override string MakeCppExportArgumentTypeString()
