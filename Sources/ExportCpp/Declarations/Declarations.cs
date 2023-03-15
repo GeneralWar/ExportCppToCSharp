@@ -91,7 +91,23 @@ namespace ExportCpp
         private bool mIsAnalyzed = false;
 
         public DeclarationCollection? Parent { get; private set; }
+        public Namespace? Namespace
+        {
+            get
+            {
+                if (this.Parent is null)
+                {
+                    return null;
+                }
 
+                DeclarationCollection? parent = this.Parent;
+                while (parent is not null && !(parent is Namespace))
+                {
+                    parent = parent?.Parent;
+                }
+                return parent as Namespace;
+            }
+        }
         internal unsafe Declaration(CppContext context, CXCursor cursor)
         {
             this.Cursor = cursor;

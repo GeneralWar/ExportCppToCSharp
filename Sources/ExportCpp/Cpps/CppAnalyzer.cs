@@ -24,6 +24,7 @@ namespace ExportCpp
 
 
         private const string PLACE_HOLDER_INCLUDES = "{PLACE_HOLDER_INCLUDES}";
+        private const string PLACE_HOLDER_USINGS = "{PLACE_HOLDER_USINGS}";
 
         public string ProjectFilename { get; init; }
         public string ProjectDirectory { get; init; }
@@ -253,7 +254,7 @@ namespace ExportCpp
                         uint line, column, offset;
                         location.GetFileLocation(out file, out line, out column, out offset);
                         string filename = this.checkFullPathForProjectFile(file.TryGetRealPathName().CString);
-                        if (string.IsNullOrWhiteSpace(filename) || !PathUtility.IsPathUnderDirectory(filename, this.ProjectDirectory))
+                        if (string.IsNullOrWhiteSpace(filename) || !PathUtility.IsPathUnderDirectory(filename, this.SolutionDirectory))
                         {
                             continue;
                         }
@@ -452,6 +453,11 @@ namespace ExportCpp
                 return;
             }
 
+            if (cursor.Extent.IsNull || CXCursorKind.CXCursor_ClassTemplatePartialSpecialization == cursor.kind)
+            {
+                return;
+            }
+
             if (CXCursorKind.CXCursor_UnexposedDecl == cursor.kind && CXTypeKind.CXType_Invalid == cursor.Type.kind)
             {
                 return;
@@ -576,7 +582,8 @@ namespace ExportCpp
 
             using (MemoryStream stream = new MemoryStream())
             {
-                List<string> includes = new List<string>();
+                HashSet<string> usings = new HashSet<string>();
+                HashSet<string> includes = new HashSet<string>();
                 using (StreamWriter writer = new StreamWriter(stream))
                 {
                     CppExportContext context = new CppExportContext(writer);
@@ -585,7 +592,8 @@ namespace ExportCpp
                     {
                         writer.WriteLine($"#include \"{this.PchFilename}\"");
                     }
-                    writer.WriteLine(PLACE_HOLDER_INCLUDES);
+                    writer.Write(PLACE_HOLDER_INCLUDES);
+                    writer.WriteLine(PLACE_HOLDER_USINGS);
 
                     writer.WriteLine(context.TabCount, "extern \"C\"");
                     writer.Write(context.TabCount, "{");
@@ -603,6 +611,7 @@ namespace ExportCpp
                     }
 
                     includes.AddRange(context.Filenames.Select(p => $"#include \"{Path.GetRelativePath(directory, p)}\""));
+                    usings.AddRange(context.Declarations.Select(d => d.Namespace).OfType<Namespace>().Select(n => $"using namespace {n.FullName};"));
                 }
 
                 string content = System.Text.Encoding.UTF8.GetString(stream.ToArray());
@@ -613,6 +622,14 @@ namespace ExportCpp
                 else
                 {
                     content = content.Replace(PLACE_HOLDER_INCLUDES, "");
+                }
+                if (usings.Count > 0)
+                {
+                    content = content.Replace(PLACE_HOLDER_USINGS, string.Join(Environment.NewLine, usings) + Environment.NewLine);
+                }
+                else
+                {
+                    content = content.Replace(PLACE_HOLDER_USINGS, "");
                 }
                 File.WriteAllText(this.ExportFilename, content);
             }
@@ -629,6 +646,11 @@ namespace ExportCpp
             if (@namespace is not null)
             {
                 this.exportNamespace(context, @namespace);
+                return;
+            }
+
+            if (!PathUtility.IsPathUnderDirectory(declaration.Filename, this.ProjectDirectory))
+            {
                 return;
             }
 
@@ -759,6 +781,11 @@ namespace ExportCpp
                 return;
             }
 
+            if (!PathUtility.IsPathUnderDirectory(declaration.Filename, this.ProjectDirectory))
+            {
+                return;
+            }
+
             Class? @class = declaration as Class;
             if (@class is not null)
             {
@@ -873,6 +900,8 @@ namespace ExportCpp
 
         public void ExportXml()
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(this.BindingFilename) ?? throw new InvalidOperationException());
+
             XmlDocument document = new XmlDocument();
             document.LoadXml("<Export></Export>");
             this.exportXml(document.DocumentElement ?? throw new InvalidOperationException(), this.Global as DeclarationCollection);
