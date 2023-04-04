@@ -1,4 +1,5 @@
-﻿using ClangSharp.Interop;
+﻿using ClangSharp;
+using ClangSharp.Interop;
 using General;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
@@ -149,15 +150,21 @@ namespace ExportCpp
 
         protected virtual string checkFullName() => this.Cursor.GetFullName();
 
-        private bool checkExport(CppContext context)
+        private bool checkExport(CppContext context, string exportMacro, int startIndex, int endIndex)
         {
-            if (string.IsNullOrWhiteSpace(this.ExportMacro))
+            if (endIndex - startIndex < exportMacro.Length)
             {
                 return false;
             }
 
-            string previousContent = CppAnalyzer.CheckContentFromPreviousCursor(context, this.Cursor);
-            int exportIndex = previousContent.LastIndexOf(this.ExportMacro);
+            string? fileContent = context.GetFileContent(this.Cursor.Location.GetFile());
+            if (string.IsNullOrWhiteSpace(fileContent))
+            {
+                return false;
+            }
+
+            string previousContent = fileContent.Substring(startIndex, endIndex - startIndex);
+            int exportIndex = previousContent.LastIndexOf(exportMacro);
             if (exportIndex < 0)
             {
                 return false;
@@ -179,6 +186,44 @@ namespace ExportCpp
             string[] exportParts = this.ExportContents = CppAnalyzer.SplitArguments(exportContent);
             this.checkExportContents(exportParts);
             return true;
+        }
+
+        private bool checkExport(CppContext context)
+        {
+            if (string.IsNullOrWhiteSpace(this.ExportMacro))
+            {
+                return false;
+            }
+
+            int previousEndIndex, currentStartIndex;
+            if (!CppAnalyzer.CheckRangeFromPreviousCursor(context, this.Cursor, out previousEndIndex, out currentStartIndex))
+            {
+                return false;
+            }
+
+            if (this.Cursor.CommentRange.IsNull || this.Cursor.CommentRange.Start.GetFile() != this.Cursor.Location.GetFile())
+            {
+                return this.checkExport(context, this.ExportMacro, previousEndIndex, currentStartIndex);
+            }
+
+            string? fileContent = context.GetFileContent(this.Cursor.Location.GetFile());
+            if (string.IsNullOrWhiteSpace(fileContent))
+            {
+                return false;
+            }
+
+            int endLine, endColumn;
+            this.Cursor.CommentRange.End.GetLocation(out endLine, out endColumn);
+            int commentEndIndex = fileContent.Locate(endLine, endColumn);
+            if (this.checkExport(context, this.ExportMacro, commentEndIndex, currentStartIndex))
+            {
+                return true;
+            }
+
+            int startLine, startColumn;
+            this.Cursor.CommentRange.Start.GetLocation(out startLine, out startColumn);
+            int commentStartIndex = fileContent.Locate(startLine, startColumn);
+            return this.checkExport(context, this.ExportMacro, previousEndIndex, commentStartIndex);
         }
 
         protected virtual void checkExportContents(string[] contents) { }

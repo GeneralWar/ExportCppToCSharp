@@ -160,6 +160,7 @@ namespace ExportCpp
             //#if DEVELOP
             //            argumentList.Add("-v");
             //#endif
+            argumentList.Add("-fparse-all-comments");
 
             Tracer.Log($"Try to execute clang with arguments : {string.Join(" ", argumentList)} {filename}");
             //ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
@@ -953,6 +954,46 @@ namespace ExportCpp
             return previousCursor.IsInvalid ? parent : previousCursor;
         }
 
+        static internal bool CheckRangeFromPreviousCursor(CppContext context, CXCursor cursor, out int previousEndIndex, out int currentStartIndex)
+        {
+            uint line, column, offset;
+
+            CXFile file = cursor.Location.GetFile();
+            string content = context.GetFileContent(file) ?? throw new InvalidOperationException();
+
+            CXCursor previousCursor = CheckPreviousCursor(cursor, cursor.Location.GetFile());
+            file = previousCursor.Location.GetFile();
+            if (string.IsNullOrWhiteSpace(file.Name.CString))
+            {
+                //cursor.Location.GetFileLocation(out file, out line, out column, out offset);
+                //return content.Substring(0, content.Locate((int)line, (int)column));
+                throw new InvalidOperationException();
+            }
+
+            Tracer.Assert(file == cursor.Location.GetFile() && !previousCursor.IsUnexposed);
+
+            cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+            currentStartIndex = content.Locate((int)line, (int)column);
+
+            previousEndIndex = 0;
+            if (!previousCursor.IsInvalid)
+            {
+                previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
+            }
+            if (previousEndIndex > currentStartIndex)
+            {
+                previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
+            }
+            if (previousEndIndex == currentStartIndex)// for nested anonymous struct or union
+            {
+                return CheckRangeFromPreviousCursor(context, previousCursor, out previousEndIndex, out currentStartIndex);
+            }
+
+            return true;
+        }
+
         static internal string CheckContentFromPreviousCursor(CppContext context, CXCursor cursor)
         {
             uint line, column, offset;
@@ -971,26 +1012,13 @@ namespace ExportCpp
 
             Tracer.Assert(file == cursor.Location.GetFile() && !previousCursor.IsUnexposed);
 
-            cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-            int startIndex = content.Locate((int)line, (int)column);
-
-            int previousEndIndex = 0;
-            if (!previousCursor.IsInvalid)
+            int previousEndIndex, currentStartIndex;
+            if (!CheckRangeFromPreviousCursor(context, cursor, out previousEndIndex, out currentStartIndex))
             {
-                previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
-            }
-            if (previousEndIndex > startIndex)
-            {
-                previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
-            }
-            if (previousEndIndex == startIndex)// for nested anonymous struct or union
-            {
-                return CheckContentFromPreviousCursor(context, previousCursor);
+                throw new InvalidOperationException();
             }
 
-            return content.Substring(previousEndIndex, startIndex - previousEndIndex);
+            return content.Substring(previousEndIndex, currentStartIndex - previousEndIndex);
         }
 
         static internal string[] SplitContent(string content, string separator, params Tuple<char, char>[] skipScopes)
