@@ -1,6 +1,5 @@
 ﻿using ClangSharp.Interop;
 using General;
-using General.Tracers;
 using System.Text.RegularExpressions;
 using System.Xml;
 
@@ -163,15 +162,15 @@ namespace ExportCpp
             argumentList.Add("-fparse-all-comments");
 
             Tracer.Log($"Try to execute clang with arguments : {string.Join(" ", argumentList)} {filename}");
-            //ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
-            ConsoleLogger.Log($"Try to analyze {filename}");
+            //Program.ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
+            Program.ConsoleLogger.Log($"Try to analyze {filename}");
             CXErrorCode errorCode = CXTranslationUnit.TryParse(CXIndex.Create(), filename, new ReadOnlySpan<string>(argumentList.ToArray()), new ReadOnlySpan<CXUnsavedFile>(unsavedFiles.ToArray()), CXTranslationUnit_Flags.CXTranslationUnit_None, out translationUnit);
             bool failed = CXErrorCode.CXError_Success != errorCode;
             if (failed || translationUnit.DiagnosticSet.Count > 0)
             {
                 if (failed)
                 {
-                    ConsoleLogger.LogError($"{errorCode} clang {string.Join(" ", argumentList)} \"{filename}\"");
+                    Program.ConsoleLogger.LogError($"{errorCode} clang {string.Join(" ", argumentList)} \"{filename}\"");
                 }
 
                 for (uint i = 0; i < translationUnit.DiagnosticSet.Count; ++i)
@@ -304,9 +303,9 @@ namespace ExportCpp
         {
             this.printVersion();
 
-            ConsoleLogger.Log($"Try to analyze project {this.ProjectFilename}");
-            ConsoleLogger.Log($"Export to {this.ExportFilename}");
-            ConsoleLogger.Log($"Bind to {this.BindingFilename}");
+            Program.ConsoleLogger.Log($"Try to analyze project {this.ProjectFilename}");
+            Program.ConsoleLogger.Log($"Export to {this.ExportFilename}");
+            Program.ConsoleLogger.Log($"Bind to {this.BindingFilename}");
 
             XmlDocument document = new XmlDocument();
             document.Load(this.ProjectFilename);
@@ -327,7 +326,7 @@ namespace ExportCpp
             }
 
             CppContext context = this.createCppContext("");
-            ConsoleLogger.Log("Analyzing ...");
+            Program.ConsoleLogger.Log("Analyzing ...");
             this.Global.Analyze(context);
 
             while (context.FailedDeclarations.Count() > 0)
@@ -335,7 +334,7 @@ namespace ExportCpp
                 Declaration[] declarations = context.FailedDeclarations.Select(f => f.declaration).ToArray();
                 context.ClearFailedDeclarations();
 
-                ConsoleLogger.Log("Analyzing ...");
+                Program.ConsoleLogger.Log("Analyzing ...");
                 foreach (Declaration declaration in declarations)
                 {
                     declaration.Analyze(context);
@@ -347,11 +346,11 @@ namespace ExportCpp
                     foreach (FailedDeclaration fail in context.FailedDeclarations)
                     {
                         string message = $"Analyze error: {fail.declaration.GetType().Name} {fail.declaration.Name}"; // Declaration.ToString might throw exception
-                        ConsoleLogger.LogError(message);
+                        Program.ConsoleLogger.LogError(message);
                         Tracer.Error(message);
 
                         message = fail.exception.ToString();
-                        ConsoleLogger.LogError(message);
+                        Program.ConsoleLogger.LogError(message);
                         Tracer.Error(message);
                     }
 #if !RELEASE
@@ -714,7 +713,7 @@ namespace ExportCpp
             context.AppendDeclaration(declaration);
 
             declaration.MakeCppExportDefinition(context);
-            ConsoleLogger.Log($"Export {declaration}");
+            Program.ConsoleLogger.Log($"Export {declaration}");
         }
 
         private void exportStruct(CppExportContext context, Struct declaration)
@@ -871,7 +870,7 @@ namespace ExportCpp
 
             declaration.MakeCSharpBindingDeclaration(context);
 
-            ConsoleLogger.Log($"Bind {declaration}");
+            Program.ConsoleLogger.Log($"Bind {declaration}");
         }
 
         private void bindStruct(CSharpBindingContext context, Struct declaration)
@@ -883,7 +882,7 @@ namespace ExportCpp
 
             context.Writer.WriteLine();
             declaration.MakeCSharpDefinition(context);
-            ConsoleLogger.Log($"Bind {declaration}");
+            Program.ConsoleLogger.Log($"Bind {declaration}");
         }
 
         private void bindEnum(CSharpBindingContext context, Enum declaration)
@@ -896,7 +895,7 @@ namespace ExportCpp
             context.WriteLine();
             declaration.MakeCSharpDefinition(context);
 
-            ConsoleLogger.Log($"Bind {declaration}");
+            Program.ConsoleLogger.Log($"Bind {declaration}");
         }
 
         public void ExportXml()

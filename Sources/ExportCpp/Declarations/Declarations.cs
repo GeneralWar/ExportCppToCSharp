@@ -1,5 +1,4 @@
-﻿using ClangSharp;
-using ClangSharp.Interop;
+﻿using ClangSharp.Interop;
 using General;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
@@ -424,6 +423,16 @@ namespace ExportCpp
                 return template.MakeGenericType(context, type);
             }
 
+            Type? result = null;
+            if (CXTypeKind.CXType_Elaborated == type.kind)
+            {
+                result = this.FindType(context, type.CanonicalType);
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+
             return this.FindType(context, type.GetOriginalTypeName());
         }
 
@@ -705,7 +714,7 @@ namespace ExportCpp
         public CXType CXType { get; init; }
 
         private DeclarationType? mType = null;
-        public DeclarationType Type => mType ?? throw new InvalidOperationException($"Make sure there is a valid {nameof(DeclarationType)}, and {nameof(Declaration.Analyze)} has been invoked");
+        public DeclarationType Type => mType ?? throw new InvalidOperationException($"Make sure there is a valid {nameof(DeclarationType)} of {this.FullName}, and {nameof(Declaration.Analyze)} has been invoked");
 
         private string? mCSharpTypeString = null;
         public string CSharpTypeString => mCSharpTypeString ?? throw new InvalidOperationException($"Make sure there is a valid C# type string, and {nameof(Declaration.Analyze)} has been invoked");
