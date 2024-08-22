@@ -1,5 +1,4 @@
 ﻿using General;
-using General.Tracers;
 
 namespace ExportCpp
 {
@@ -19,9 +18,11 @@ namespace ExportCpp
         private const string ARGUMENT_BINDING_NAMESPACE = "binding-namespace";
         private const string ARGUMENT_BINDING_CLASSNAME = "binding-classname";
 
+        static internal readonly ConsoleLogger ConsoleLogger = new ConsoleLogger();
+
         static void Main(string[] args)
         {
-            Tracer.onLog += onTracerLog;
+            Tracer.OnLog += onTracerLog;
 
             CommandLine commandLine = new CommandLine();
             commandLine.SetHelpKey("-h|--help");
@@ -85,7 +86,7 @@ namespace ExportCpp
             analyzer.Bind();
         }
 
-        private static void onTracerLog(Tracer.LogMessage message)
+        private static void onTracerLog(LogMessage message)
         {
             if (string.IsNullOrWhiteSpace(message.message))
             {
@@ -94,11 +95,11 @@ namespace ExportCpp
 
             switch (message.level)
             {
-                case Tracer.LogLevel.Warning:
+                case LogLevel.Warning:
                     ConsoleLogger.LogWarning(message.message);
                     break;
-                case Tracer.LogLevel.Error:
-                case Tracer.LogLevel.Exception:
+                case LogLevel.Error:
+                case LogLevel.Exception:
                     ConsoleLogger.LogError(message.message);
                     break;
             }

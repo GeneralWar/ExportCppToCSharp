@@ -1,6 +1,5 @@
 ﻿using ClangSharp.Interop;
 using General;
-using General.Tracers;
 using System.Text.RegularExpressions;
 using System.Xml;
 
@@ -160,17 +159,18 @@ namespace ExportCpp
             //#if DEVELOP
             //            argumentList.Add("-v");
             //#endif
+            argumentList.Add("-fparse-all-comments");
 
             Tracer.Log($"Try to execute clang with arguments : {string.Join(" ", argumentList)} {filename}");
-            //ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
-            ConsoleLogger.Log($"Try to analyze {filename}");
+            //Program.ConsoleLogger.Log($"clang {string.Join(" ", argumentList)} \"{filename}\"");
+            Program.ConsoleLogger.Log($"Try to analyze {filename}");
             CXErrorCode errorCode = CXTranslationUnit.TryParse(CXIndex.Create(), filename, new ReadOnlySpan<string>(argumentList.ToArray()), new ReadOnlySpan<CXUnsavedFile>(unsavedFiles.ToArray()), CXTranslationUnit_Flags.CXTranslationUnit_None, out translationUnit);
             bool failed = CXErrorCode.CXError_Success != errorCode;
             if (failed || translationUnit.DiagnosticSet.Count > 0)
             {
                 if (failed)
                 {
-                    ConsoleLogger.LogError($"{errorCode} clang {string.Join(" ", argumentList)} \"{filename}\"");
+                    Program.ConsoleLogger.LogError($"{errorCode} clang {string.Join(" ", argumentList)} \"{filename}\"");
                 }
 
                 for (uint i = 0; i < translationUnit.DiagnosticSet.Count; ++i)
@@ -303,9 +303,9 @@ namespace ExportCpp
         {
             this.printVersion();
 
-            ConsoleLogger.Log($"Try to analyze project {this.ProjectFilename}");
-            ConsoleLogger.Log($"Export to {this.ExportFilename}");
-            ConsoleLogger.Log($"Bind to {this.BindingFilename}");
+            Program.ConsoleLogger.Log($"Try to analyze project {this.ProjectFilename}");
+            Program.ConsoleLogger.Log($"Export to {this.ExportFilename}");
+            Program.ConsoleLogger.Log($"Bind to {this.BindingFilename}");
 
             XmlDocument document = new XmlDocument();
             document.Load(this.ProjectFilename);
@@ -326,7 +326,7 @@ namespace ExportCpp
             }
 
             CppContext context = this.createCppContext("");
-            ConsoleLogger.Log("Analyzing ...");
+            Program.ConsoleLogger.Log("Analyzing ...");
             this.Global.Analyze(context);
 
             while (context.FailedDeclarations.Count() > 0)
@@ -334,7 +334,7 @@ namespace ExportCpp
                 Declaration[] declarations = context.FailedDeclarations.Select(f => f.declaration).ToArray();
                 context.ClearFailedDeclarations();
 
-                ConsoleLogger.Log("Analyzing ...");
+                Program.ConsoleLogger.Log("Analyzing ...");
                 foreach (Declaration declaration in declarations)
                 {
                     declaration.Analyze(context);
@@ -346,11 +346,11 @@ namespace ExportCpp
                     foreach (FailedDeclaration fail in context.FailedDeclarations)
                     {
                         string message = $"Analyze error: {fail.declaration.GetType().Name} {fail.declaration.Name}"; // Declaration.ToString might throw exception
-                        ConsoleLogger.LogError(message);
+                        Program.ConsoleLogger.LogError(message);
                         Tracer.Error(message);
 
                         message = fail.exception.ToString();
-                        ConsoleLogger.LogError(message);
+                        Program.ConsoleLogger.LogError(message);
                         Tracer.Error(message);
                     }
 #if !RELEASE
@@ -713,7 +713,7 @@ namespace ExportCpp
             context.AppendDeclaration(declaration);
 
             declaration.MakeCppExportDefinition(context);
-            ConsoleLogger.Log($"Export {declaration}");
+            Program.ConsoleLogger.Log($"Export {declaration}");
         }
 
         private void exportStruct(CppExportContext context, Struct declaration)
@@ -870,7 +870,7 @@ namespace ExportCpp
 
             declaration.MakeCSharpBindingDeclaration(context);
 
-            ConsoleLogger.Log($"Bind {declaration}");
+            Program.ConsoleLogger.Log($"Bind {declaration}");
         }
 
         private void bindStruct(CSharpBindingContext context, Struct declaration)
@@ -882,7 +882,7 @@ namespace ExportCpp
 
             context.Writer.WriteLine();
             declaration.MakeCSharpDefinition(context);
-            ConsoleLogger.Log($"Bind {declaration}");
+            Program.ConsoleLogger.Log($"Bind {declaration}");
         }
 
         private void bindEnum(CSharpBindingContext context, Enum declaration)
@@ -895,7 +895,7 @@ namespace ExportCpp
             context.WriteLine();
             declaration.MakeCSharpDefinition(context);
 
-            ConsoleLogger.Log($"Bind {declaration}");
+            Program.ConsoleLogger.Log($"Bind {declaration}");
         }
 
         public void ExportXml()
@@ -953,6 +953,46 @@ namespace ExportCpp
             return previousCursor.IsInvalid ? parent : previousCursor;
         }
 
+        static internal bool CheckRangeFromPreviousCursor(CppContext context, CXCursor cursor, out int previousEndIndex, out int currentStartIndex)
+        {
+            uint line, column, offset;
+
+            CXFile file = cursor.Location.GetFile();
+            string content = context.GetFileContent(file) ?? throw new InvalidOperationException();
+
+            CXCursor previousCursor = CheckPreviousCursor(cursor, cursor.Location.GetFile());
+            file = previousCursor.Location.GetFile();
+            if (string.IsNullOrWhiteSpace(file.Name.CString))
+            {
+                //cursor.Location.GetFileLocation(out file, out line, out column, out offset);
+                //return content.Substring(0, content.Locate((int)line, (int)column));
+                throw new InvalidOperationException();
+            }
+
+            Tracer.Assert(file == cursor.Location.GetFile() && !previousCursor.IsUnexposed);
+
+            cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+            currentStartIndex = content.Locate((int)line, (int)column);
+
+            previousEndIndex = 0;
+            if (!previousCursor.IsInvalid)
+            {
+                previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
+            }
+            if (previousEndIndex > currentStartIndex)
+            {
+                previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
+                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
+            }
+            if (previousEndIndex == currentStartIndex)// for nested anonymous struct or union
+            {
+                return CheckRangeFromPreviousCursor(context, previousCursor, out previousEndIndex, out currentStartIndex);
+            }
+
+            return true;
+        }
+
         static internal string CheckContentFromPreviousCursor(CppContext context, CXCursor cursor)
         {
             uint line, column, offset;
@@ -971,26 +1011,13 @@ namespace ExportCpp
 
             Tracer.Assert(file == cursor.Location.GetFile() && !previousCursor.IsUnexposed);
 
-            cursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-            int startIndex = content.Locate((int)line, (int)column);
-
-            int previousEndIndex = 0;
-            if (!previousCursor.IsInvalid)
+            int previousEndIndex, currentStartIndex;
+            if (!CheckRangeFromPreviousCursor(context, cursor, out previousEndIndex, out currentStartIndex))
             {
-                previousCursor.Extent.End.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
-            }
-            if (previousEndIndex > startIndex)
-            {
-                previousCursor.Extent.Start.GetFileLocation(out file, out line, out column, out offset);
-                previousEndIndex = content.Locate((int)line, (int)column); // offset is not accurate
-            }
-            if (previousEndIndex == startIndex)// for nested anonymous struct or union
-            {
-                return CheckContentFromPreviousCursor(context, previousCursor);
+                throw new InvalidOperationException();
             }
 
-            return content.Substring(previousEndIndex, startIndex - previousEndIndex);
+            return content.Substring(previousEndIndex, currentStartIndex - previousEndIndex);
         }
 
         static internal string[] SplitContent(string content, string separator, params Tuple<char, char>[] skipScopes)

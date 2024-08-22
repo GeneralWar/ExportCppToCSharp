@@ -39,6 +39,8 @@ namespace ExportCpp
         private List<FailedDeclaration> mFailedDeclarations = new List<FailedDeclaration>();
         public IEnumerable<FailedDeclaration> FailedDeclarations => mFailedDeclarations;
 
+        private Dictionary<Uri, string> mFileContents = new Dictionary<Uri, string>();
+
         public CppContext(string filename, CppAnalyzer analyzer) : this(filename, File.Exists(filename) ? File.ReadAllText(filename) : "", analyzer) { }
 
         internal CppContext(string filename, string fileContent, CppAnalyzer analyzer)
@@ -116,6 +118,17 @@ namespace ExportCpp
         public void ClearFailedDeclarations()
         {
             mFailedDeclarations.Clear();
+        }
+
+        public string? GetFileContent(CXFile file)
+        {
+            string? content;
+            Uri filename = new Uri(file.TryGetRealPathName().CString);
+            if (!mFileContents.TryGetValue(filename, out content))
+            {
+                mFileContents.Add(filename, content = File.ReadAllText(filename.LocalPath));
+            }
+            return content;
         }
 
         public override string ToString()

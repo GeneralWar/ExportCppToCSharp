@@ -268,5 +268,14 @@ namespace ExportCpp
             instance.GetFileLocation(out file, out line, out column, out offset);
             return (int)offset;
         }
+
+        static public void GetLocation(this CXSourceLocation instance, out int line, out int column)
+        {
+            CXFile file;
+            uint uline, ucolumn, offset;
+            instance.GetFileLocation(out file, out uline, out ucolumn, out offset);
+            column = (int)ucolumn;
+            line = (int)uline;
+        }
     }
 }

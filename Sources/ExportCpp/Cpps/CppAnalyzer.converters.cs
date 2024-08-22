@@ -1,6 +1,4 @@
-﻿using General.Tracers;
-
-namespace ExportCpp
+﻿namespace ExportCpp
 {
     public partial class CppAnalyzer
     {
@@ -204,7 +202,7 @@ namespace ExportCpp
             ITemplateTypeConverter? converter;
             if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
             {
-                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                Program.ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
                 return null;
             }
 
@@ -216,7 +214,7 @@ namespace ExportCpp
             ITemplateTypeConverter? converter;
             if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
             {
-                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                Program.ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
                 return null;
             }
 
@@ -228,7 +226,7 @@ namespace ExportCpp
             ITemplateTypeConverter? converter;
             if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
             {
-                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                Program.ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
                 return null;
             }
 
@@ -240,7 +238,7 @@ namespace ExportCpp
             ITemplateTypeConverter? converter;
             if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
             {
-                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                Program.ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
                 return null;
             }
 
@@ -252,7 +250,7 @@ namespace ExportCpp
             ITemplateTypeConverter? converter;
             if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
             {
-                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                Program.ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
                 return null;
             }
 
@@ -264,7 +262,7 @@ namespace ExportCpp
             ITemplateTypeConverter? converter;
             if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
             {
-                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                Program.ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
                 return null;
             }
 
@@ -276,7 +274,7 @@ namespace ExportCpp
             ITemplateTypeConverter? converter;
             if (!mTemplateTypeConverters.TryGetValue(declaration.FullName, out converter))
             {
-                ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
+                Program.ConsoleLogger.LogWarning($"extern \"C\" does not support template type, so it is better to have a covnerter for template type {declaration.FullName}");
                 return null;
             }
 

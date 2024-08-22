@@ -117,14 +117,14 @@ static internal extern System.Int32 test_class_substract(IntPtr instance, System
 
 ```
 >clang -v
-clang version 15.0.0
+clang version 18.1.3.1
 Target: x86_64-pc-windows-msvc
 Thread model: posix
 ```
 
 ## Caution
 
-- It only works on clang version 15.x
-- You should copy libClangSharp.dll to output directory manually ([link](https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders))
+- It only works on clang version 18.x
+- You should install libClangSharp.runtime.* with NuGet if necessary in order to provide libClangSharp.dll
 
 ## Suggestions welcome
